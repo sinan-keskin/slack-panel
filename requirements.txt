@@ -1,0 +1,5 @@
+streamlit
+slack_sdk
+requests
+pandas
+psycopg[binary]
