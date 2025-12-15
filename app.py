@@ -9,7 +9,7 @@ import pandas as pd
 import time
 import psycopg
 
-st.set_page_config(page_title="Slack Mesaj Paneli", layout="wide", initial_sidebar_state="collapsed")
+st.set_page_config(page_title="SinanKee", layout="wide", initial_sidebar_state="collapsed")
 
 # ================== CONSTANTS ==================
 TODAY = date.today()
@@ -418,7 +418,7 @@ if page == "📜 Gönderim Logu":
 # 📤 MESAJ GÖNDER (DB)
 # =================================================
 if page == "📤 Mesaj Gönder":
-    st.title("Slack Mesaj Paneli")
+    st.title("AksiyonKee")
     st.caption(f"📅 {DAYS_TR[TODAY.weekday()]} — {format_tr_date(TODAY)}")
     st.divider()
 
@@ -962,3 +962,4 @@ if page == "⚙️ Ayarlar":
         db_delete_attachment(apick)
         st.success("Silindi ✅")
         st.rerun()
+
