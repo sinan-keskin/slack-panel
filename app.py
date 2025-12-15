@@ -1,21 +1,17 @@
 import streamlit as st
-import json
 import requests
 import re
 from io import BytesIO
 from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
-from datetime import date
+from datetime import date, datetime
 import pandas as pd
-import os
 import time
+import psycopg
 
 st.set_page_config(page_title="Slack Mesaj Paneli", layout="wide", initial_sidebar_state="collapsed")
 
 # ================== CONSTANTS ==================
-CONFIG_FILE = "config.json"
-SENT_LOG_FILE = "sent_log.json"
-
 TODAY = date.today()
 TODAY_KEY = TODAY.isoformat()
 
@@ -37,121 +33,6 @@ VAR_PATTERN = re.compile(r"\{\{([^{}]+)\}\}")
 ANCHOR_HTML = re.compile(r'<a\s+[^>]*href=[\'"][^\'"]+[\'"][^>]*>(.*?)</a>', re.IGNORECASE | re.DOTALL)
 ANCHOR_MD = re.compile(r'\[([^\]]+)\]\(([^)]+)\)')  # [text](url)
 
-
-# ================== SAFE JSON IO ==================
-def atomic_save_json(path: str, obj: dict):
-    """Windows file-lock tolerant atomic-ish save."""
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(obj, f, ensure_ascii=False, indent=2)
-
-    try:
-        if os.path.exists(path):
-            os.remove(path)
-        os.rename(tmp, path)
-    except PermissionError:
-        time.sleep(0.1)
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(obj, f, ensure_ascii=False, indent=2)
-        if os.path.exists(tmp):
-            try:
-                os.remove(tmp)
-            except Exception:
-                pass
-
-
-# ================== CONFIG IO (SAFE + MIGRATE) ==================
-def default_config():
-    return {
-        "categories": [DEFAULT_CATEGORY],
-        "days": {k: [] for k in DAY_KEYS},
-        "variables": {},     # {"Kampanya": {"category":"Kampanya","options":[...]}}
-        "attachments": {}    # {"Preset": {"category":"Kampanya","url":"https://prnt.sc/..."}}
-    }
-
-def migrate_config(cfg):
-    if not isinstance(cfg, dict):
-        cfg = default_config()
-
-    # categories
-    cats = cfg.get("categories")
-    if not isinstance(cats, list) or not cats:
-        cats = [DEFAULT_CATEGORY]
-    cats = [str(x).strip() for x in cats if str(x).strip()]
-    if not cats:
-        cats = [DEFAULT_CATEGORY]
-    if DEFAULT_CATEGORY not in cats:
-        cats.insert(0, DEFAULT_CATEGORY)
-    cfg["categories"] = cats
-
-    # days
-    if "days" not in cfg or not isinstance(cfg["days"], dict):
-        cfg["days"] = {k: [] for k in DAY_KEYS}
-    for day in DAY_KEYS:
-        cfg["days"].setdefault(day, [])
-        new_rows = []
-        for r in cfg["days"][day]:
-            if isinstance(r, str):
-                new_rows.append({"text": r, "requires_attachment": False, "category": DEFAULT_CATEGORY})
-            elif isinstance(r, dict):
-                cat = str(r.get("category", DEFAULT_CATEGORY) or DEFAULT_CATEGORY).strip() or DEFAULT_CATEGORY
-                if cat not in cfg["categories"]:
-                    cat = DEFAULT_CATEGORY
-                new_rows.append({
-                    "text": str(r.get("text", "") or ""),
-                    "requires_attachment": bool(r.get("requires_attachment", False)),
-                    "category": cat
-                })
-        cfg["days"][day] = new_rows
-
-    # variables
-    if "variables" not in cfg or not isinstance(cfg["variables"], dict):
-        cfg["variables"] = {}
-    for k, v in list(cfg["variables"].items()):
-        name = str(k).strip()
-        if not name:
-            cfg["variables"].pop(k, None)
-            continue
-        if isinstance(v, dict):
-            cat = str(v.get("category", DEFAULT_CATEGORY) or DEFAULT_CATEGORY).strip() or DEFAULT_CATEGORY
-            if cat not in cfg["categories"]:
-                cat = DEFAULT_CATEGORY
-            opts = v.get("options", [])
-            if not isinstance(opts, list):
-                opts = [opts] if opts is not None else []
-            opts = [str(x).strip() for x in opts if str(x).strip()]
-            cfg["variables"][name] = {"category": cat, "options": opts}
-        else:
-            opts = v if isinstance(v, list) else ([v] if v is not None else [])
-            opts = [str(x).strip() for x in opts if str(x).strip()]
-            cfg["variables"][name] = {"category": DEFAULT_CATEGORY, "options": opts}
-
-    # attachments
-    if "attachments" not in cfg or not isinstance(cfg["attachments"], dict):
-        cfg["attachments"] = {}
-    for k, v in list(cfg["attachments"].items()):
-        name = str(k).strip()
-        if not name:
-            cfg["attachments"].pop(k, None)
-            continue
-        if isinstance(v, dict):
-            cat = str(v.get("category", DEFAULT_CATEGORY) or DEFAULT_CATEGORY).strip() or DEFAULT_CATEGORY
-            if cat not in cfg["categories"]:
-                cat = DEFAULT_CATEGORY
-            url = str(v.get("url", "") or "").strip()
-            if not url:
-                cfg["attachments"].pop(k, None)
-            else:
-                cfg["attachments"][name] = {"category": cat, "url": url}
-        else:
-            url = str(v or "").strip()
-            if not url:
-                cfg["attachments"].pop(k, None)
-            else:
-                cfg["attachments"][name] = {"category": DEFAULT_CATEGORY, "url": url}
-
-    return cfg
-    
 # ================== TR DATE (locale bağımsız) ==================
 TR_MONTHS = {
     "ocak": 1, "şubat": 2, "subat": 2, "mart": 3, "nisan": 4,
@@ -191,88 +72,188 @@ def format_tr_date(d: date) -> str:
     """Locale'e bakmadan TR tarih basar: 16 Aralık 2025"""
     return f"{d.day:02d} {TR_MONTH_NAMES[d.month]} {d.year}"
 
-def cleanup_expired_attachments(attachments: dict) -> tuple[dict, bool]:
-    """Tarihi geçmiş (bugünden önce) olan isimleri siler. (cleaned, changed)"""
-    if not isinstance(attachments, dict):
-        return {}, True
-    today = date.today()
+# ================== DB ==================
+@st.cache_resource
+def get_conn():
+    db_url = st.secrets.get("DATABASE_URL", "")
+    if not db_url:
+        st.error("DATABASE_URL secrets içinde yok.")
+        st.stop()
+    return psycopg.connect(db_url, autocommit=True)
+
+def db_get_categories():
+    with get_conn().cursor() as cur:
+        cur.execute("select name from categories order by name")
+        rows = cur.fetchall()
+    cats = [r[0] for r in rows] if rows else []
+    if DEFAULT_CATEGORY not in cats:
+        cats.insert(0, DEFAULT_CATEGORY)
+    return cats
+
+def db_add_category(name: str):
+    name = (name or "").strip()
+    if not name:
+        return
+    with get_conn().cursor() as cur:
+        cur.execute("insert into categories(name) values (%s) on conflict do nothing", (name,))
+
+def db_delete_category(name: str):
+    name = (name or "").strip()
+    if not name or name == DEFAULT_CATEGORY:
+        return
+    with get_conn().cursor() as cur:
+        cur.execute("update day_rows set category=%s where category=%s", (DEFAULT_CATEGORY, name))
+        cur.execute("update variables set category=%s where category=%s", (DEFAULT_CATEGORY, name))
+        cur.execute("update attachments set category=%s where category=%s", (DEFAULT_CATEGORY, name))
+        cur.execute("delete from categories where name=%s and name<>%s", (name, DEFAULT_CATEGORY))
+
+def db_get_day_rows(day_key: str):
+    with get_conn().cursor() as cur:
+        cur.execute(
+            """
+            select id, text, category, requires_attachment
+            from day_rows
+            where day_key=%s and active=true
+            order by id asc
+            """,
+            (day_key,),
+        )
+        rows = cur.fetchall()
+    return [
+        {"id": r[0], "text": r[1], "category": r[2], "requires_attachment": bool(r[3])}
+        for r in rows
+    ]
+
+def db_replace_day_rows(day_key: str, new_rows: list[dict]):
+    with get_conn().cursor() as cur:
+        cur.execute("delete from day_rows where day_key=%s", (day_key,))
+        for r in new_rows:
+            cur.execute(
+                """
+                insert into day_rows(day_key, text, category, requires_attachment, active)
+                values (%s, %s, %s, %s, true)
+                """,
+                (day_key, r["text"], r["category"], bool(r.get("requires_attachment", False))),
+            )
+
+def db_add_day_row(day_key: str, text: str, category: str, requires_attachment: bool):
+    with get_conn().cursor() as cur:
+        cur.execute(
+            """
+            insert into day_rows(day_key, text, category, requires_attachment, active)
+            values (%s, %s, %s, %s, true)
+            """,
+            (day_key, text, category, bool(requires_attachment)),
+        )
+
+def db_get_variables():
     out = {}
-    changed = False
-    for name, data in attachments.items():
-        d = extract_tr_date_from_name(name)
-        if d and d < today:
-            changed = True
-            continue
-        out[name] = data
-    return out, changed
+    with get_conn().cursor() as cur:
+        cur.execute("select name, category from variables order by name")
+        vars_ = cur.fetchall()
+        for name, cat in vars_:
+            cur.execute("select value from variable_options where variable_name=%s order by id", (name,))
+            opts = [x[0] for x in cur.fetchall()]
+            out[name] = {"category": cat, "options": opts}
+    return out
 
+def db_upsert_variable(name: str, category: str, options: list[str]):
+    name = (name or "").strip()
+    if not name:
+        return
+    category = (category or DEFAULT_CATEGORY).strip() or DEFAULT_CATEGORY
+    options = [o.strip() for o in (options or []) if o and o.strip()]
+    with get_conn().cursor() as cur:
+        cur.execute(
+            """
+            insert into variables(name, category)
+            values (%s,%s)
+            on conflict (name) do update set category=excluded.category
+            """,
+            (name, category),
+        )
+        cur.execute("delete from variable_options where variable_name=%s", (name,))
+        for o in options:
+            cur.execute("insert into variable_options(variable_name, value) values (%s,%s)", (name, o))
 
-def load_config():
-    if not os.path.exists(CONFIG_FILE):
-        cfg = default_config()
-        atomic_save_json(CONFIG_FILE, cfg)
-        return cfg
+def db_delete_variable(name: str):
+    name = (name or "").strip()
+    if not name:
+        return
+    with get_conn().cursor() as cur:
+        cur.execute("delete from variables where name=%s", (name,))
 
-    try:
-        with open(CONFIG_FILE, "r", encoding="utf-8") as f:
-            content = f.read().strip()
+def db_get_attachments(include_expired: bool):
+    with get_conn().cursor() as cur:
+        if include_expired:
+            cur.execute("select name, category, url, valid_date from attachments order by name")
+        else:
+            cur.execute(
+                """
+                select name, category, url, valid_date
+                from attachments
+                where valid_date is null or valid_date >= current_date
+                order by name
+                """
+            )
+        rows = cur.fetchall()
+    out = {}
+    for name, cat, url, vdate in rows:
+        out[name] = {"category": cat, "url": url, "valid_date": vdate}
+    return out
 
-        if not content:
-            cfg = default_config()
-            atomic_save_json(CONFIG_FILE, cfg)
-            return cfg
+def db_upsert_attachment(name: str, category: str, url: str, valid_date):
+    name = (name or "").strip()
+    url = (url or "").strip()
+    if not name or not url:
+        return
+    category = (category or DEFAULT_CATEGORY).strip() or DEFAULT_CATEGORY
+    with get_conn().cursor() as cur:
+        cur.execute(
+            """
+            insert into attachments(name, category, url, valid_date)
+            values (%s,%s,%s,%s)
+            on conflict (name) do update
+            set category=excluded.category, url=excluded.url, valid_date=excluded.valid_date
+            """,
+            (name, category, url, valid_date),
+        )
 
-        cfg = json.loads(content)
-        cfg = migrate_config(cfg)
+def db_delete_attachment(name: str):
+    name = (name or "").strip()
+    if not name:
+        return
+    with get_conn().cursor() as cur:
+        cur.execute("delete from attachments where name=%s", (name,))
 
-        # 🔥 Tarihi geçen ek presetlerini otomatik temizle
-        cleaned_atts, changed = cleanup_expired_attachments(cfg.get("attachments", {}))
-        if changed:
-            cfg["attachments"] = cleaned_atts
+def db_get_sent_for_date(d: date):
+    with get_conn().cursor() as cur:
+        cur.execute("select template_text from sent_log where sent_date=%s order by id", (d,))
+        rows = cur.fetchall()
+    return [r[0] for r in rows]
 
-        atomic_save_json(CONFIG_FILE, cfg)
-        return cfg
+def db_get_sent_dates():
+    with get_conn().cursor() as cur:
+        cur.execute("select sent_date, count(*) from sent_log group by sent_date order by sent_date desc")
+        rows = cur.fetchall()
+    return rows
 
-    except Exception:
-        cfg = default_config()
-        atomic_save_json(CONFIG_FILE, cfg)
-        return cfg
+def db_get_sent_today_set(d: date):
+    return set(db_get_sent_for_date(d))
 
-
-
-
-# ================== SENT LOG (PERSIST) ==================
-def default_sent_log():
-    return {"by_date": {}}
-
-def load_sent_log():
-    if not os.path.exists(SENT_LOG_FILE):
-        log = default_sent_log()
-        atomic_save_json(SENT_LOG_FILE, log)
-        return log
-    try:
-        with open(SENT_LOG_FILE, "r", encoding="utf-8") as f:
-            content = f.read().strip()
-        if not content:
-            log = default_sent_log()
-            atomic_save_json(SENT_LOG_FILE, log)
-            return log
-        log = json.loads(content)
-        if not isinstance(log, dict) or "by_date" not in log or not isinstance(log["by_date"], dict):
-            log = default_sent_log()
-        atomic_save_json(SENT_LOG_FILE, log)
-        return log
-    except Exception:
-        log = default_sent_log()
-        atomic_save_json(SENT_LOG_FILE, log)
-        return log
-
-def add_sent_today(sent_log: dict, template_text: str):
-    sent_log["by_date"].setdefault(TODAY_KEY, [])
-    if template_text not in sent_log["by_date"][TODAY_KEY]:
-        sent_log["by_date"][TODAY_KEY].append(template_text)
-        atomic_save_json(SENT_LOG_FILE, sent_log)
-
+def db_add_sent(d: date, template_text: str):
+    # aynı gün aynı template tekrar eklenmesin
+    with get_conn().cursor() as cur:
+        cur.execute(
+            "select 1 from sent_log where sent_date=%s and template_text=%s limit 1",
+            (d, template_text),
+        )
+        if cur.fetchone():
+            return
+        cur.execute(
+            "insert into sent_log(sent_date, template_text) values (%s,%s)",
+            (d, template_text),
+        )
 
 # ================== HELPERS ==================
 def extract_vars(text: str) -> list[str]:
@@ -373,7 +354,6 @@ def wait_until_file_visible(client: WebClient, channel_id: str, file_id: str, ti
         return False
     return False
 
-
 # ================== LOGIN ==================
 if "logged" not in st.session_state:
     st.session_state.logged = False
@@ -389,14 +369,9 @@ if not st.session_state.logged:
             st.error("Parola yanlış")
     st.stop()
 
-
 # ================== STATE ==================
 if "link_cache" not in st.session_state:
     st.session_state.link_cache = {}  # url -> bool
-
-cfg = load_config()
-sent_log = load_sent_log()
-sent_today = set(sent_log.get("by_date", {}).get(TODAY_KEY, []))
 
 client = get_slack_client()
 channel_id = st.secrets.get("SLACK_CHANNEL_ID", "")
@@ -404,27 +379,24 @@ if not channel_id:
     st.error("SLACK_CHANNEL_ID secrets içinde yok.")
     st.stop()
 
+# Menü
 page = st.sidebar.radio("Menü", ["📤 Mesaj Gönder", "📜 Gönderim Logu", "⚙️ Ayarlar"])
 
-
 # =================================================
-# 📜 GÖNDERİM LOGU
+# 📜 GÖNDERİM LOGU (DB)
 # =================================================
 if page == "📜 Gönderim Logu":
     st.title("📜 Gönderim Logu")
-    st.caption("sent_log.json içinden seçtiğin tarihe ait gönderilen satırları gösterir.")
+    st.caption("Supabase DB içinden seçtiğin tarihe ait gönderilen satırları gösterir.")
     st.divider()
 
-    sent_log2 = load_sent_log()
-    by_date = sent_log2.get("by_date", {})
-
     selected_date = st.date_input("Tarih seç", value=TODAY)
-    selected_key = selected_date.isoformat()
+    items = db_get_sent_for_date(selected_date)
 
-    items = by_date.get(selected_key, [])
-
+    # özet
+    all_dates = db_get_sent_dates()
     c1, c2, _ = st.columns([2, 2, 6])
-    c1.metric("Toplam gün", len(by_date))
+    c1.metric("Toplam gün", len(all_dates))
     c2.metric("Seçilen gün gönderilen", len(items))
 
     if not items:
@@ -436,27 +408,26 @@ if page == "📜 Gönderim Logu":
 
     st.divider()
     with st.expander("Tüm günleri özetle"):
-        all_rows = [{"Tarih": d, "Adet": len(msgs)} for d, msgs in sorted(by_date.items(), reverse=True)]
-        if all_rows:
-            st.dataframe(pd.DataFrame(all_rows), width="stretch", hide_index=True)
+        if all_dates:
+            df = pd.DataFrame([{"Tarih": d.isoformat(), "Adet": c} for d, c in all_dates])
+            st.dataframe(df, width="stretch", hide_index=True)
         else:
             st.write("Log boş.")
 
-
 # =================================================
-# 📤 MESAJ GÖNDER
+# 📤 MESAJ GÖNDER (DB)
 # =================================================
 if page == "📤 Mesaj Gönder":
     st.title("Slack Mesaj Paneli")
     st.caption(f"📅 {DAYS_TR[TODAY.weekday()]} — {format_tr_date(TODAY)}")
     st.divider()
 
-    cfg = load_config()
-    categories = cfg.get("categories", [DEFAULT_CATEGORY])
-    variables = cfg.get("variables", {})
-    attachments = cfg.get("attachments", {})
+    categories = db_get_categories()
+    variables = db_get_variables()
+    attachments = db_get_attachments(include_expired=False)  # sadece geçerli olanlar
+    sent_today = db_get_sent_today_set(TODAY)
 
-    rows_today = cfg["days"].get(DAY_KEY, [])
+    rows_today = db_get_day_rows(DAY_KEY)
     visible_rows = [r for r in rows_today if str(r.get("text", "") or "") not in sent_today]
 
     if not visible_rows:
@@ -533,7 +504,7 @@ if page == "📤 Mesaj Gönder":
         hide_index=True,
         key=f"editor_{DAY_KEY}_{TODAY_KEY}",
         column_config=column_config,
-        disabled=["Ek Zorunlu", "Ek Seç", "Lightshot Link"],
+        disabled=["Ek Zorunlu"],
     )
 
     # ============== AUTO-CLEAN (kategori + dropdown sadece seçim) ==============
@@ -553,13 +524,14 @@ if page == "📤 Mesaj Gönder":
 
         row_vars_in_text = set(extract_vars(template))
 
-        # Ek Seç: sadece seçim
+        # Ek Seç: sadece seçim (paste vs.)
         ek_sec = str(df_out.at[idx, "Ek Seç"]).strip()
         if ek_sec not in allowed_ek:
             df_out.at[idx, "Ek Seç"] = SELECT_PLACEHOLDER if req else ""
             if not req:
                 df_out.at[idx, "Lightshot Link"] = ""
             cleaned = True
+            ek_sec = str(df_out.at[idx, "Ek Seç"]).strip()
 
         # Ek zorunlu değilse ek alanlarını temizle
         if not req:
@@ -573,7 +545,7 @@ if page == "📤 Mesaj Gönder":
             # Preset seçiliyse kategori kontrol + URL zorla
             if ek_sec and ek_sec not in ("None", "") and ek_sec not in (SELECT_PLACEHOLDER, MANUAL_OPTION):
                 preset = attachments.get(ek_sec)
-                preset_cat = preset.get("category") if isinstance(preset, dict) else DEFAULT_CATEGORY
+                preset_cat = str((preset.get("category") if isinstance(preset, dict) else DEFAULT_CATEGORY) or DEFAULT_CATEGORY).strip()
                 if preset_cat != row_cat:
                     df_out.at[idx, "Ek Seç"] = SELECT_PLACEHOLDER
                     df_out.at[idx, "Lightshot Link"] = ""
@@ -583,6 +555,11 @@ if page == "📤 Mesaj Gönder":
                     if preset_url and str(df_out.at[idx, "Lightshot Link"]).strip() != preset_url:
                         df_out.at[idx, "Lightshot Link"] = preset_url
                         cleaned = True
+
+            # Manuel seçiliyse link boş değilse dokunma (kullanıcı yazabilir)
+            if str(df_out.at[idx, "Ek Seç"]).strip() == MANUAL_OPTION:
+                # prnt.sc değilse gönderimde hata verecek; burada sadece karışıklığı engellemiyoruz
+                pass
 
         # Değişken kolonları: sadece seçim + kategori uyumu
         for var in vars_today:
@@ -607,7 +584,7 @@ if page == "📤 Mesaj Gönder":
                 continue
 
             # placeholder var → kategori uyumu şart
-            vcat = vdef.get("category") if isinstance(vdef, dict) else DEFAULT_CATEGORY
+            vcat = str((vdef.get("category") if isinstance(vdef, dict) else DEFAULT_CATEGORY) or DEFAULT_CATEGORY).strip()
             if vcat != row_cat:
                 df_out.at[idx, col] = SELECT_PLACEHOLDER
                 cleaned = True
@@ -640,7 +617,7 @@ if page == "📤 Mesaj Gönder":
                 if not isinstance(preset, dict):
                     results.append({"Satır": i + 1, "Sonuç": "❗ Preset yok"})
                     continue
-                if preset.get("category", DEFAULT_CATEGORY) != row_cat:
+                if str(preset.get("category", DEFAULT_CATEGORY)).strip() != row_cat:
                     results.append({"Satır": i + 1, "Sonuç": "❗ Preset kategori uyumsuz"})
                     continue
                 link = str(preset.get("url", "") or "").strip()
@@ -695,7 +672,7 @@ if page == "📤 Mesaj Gönder":
             row_vars = extract_vars(template)
             for v in row_vars:
                 vdef = variables.get(v, {})
-                vcat = vdef.get("category") if isinstance(vdef, dict) else DEFAULT_CATEGORY
+                vcat = str((vdef.get("category") if isinstance(vdef, dict) else DEFAULT_CATEGORY) or DEFAULT_CATEGORY).strip()
                 if vcat != row_cat:
                     errors.append(f"- Değişken kategori uyumsuz ({v}/{vcat}) satır:{row_cat} → {template}")
                     break
@@ -722,7 +699,7 @@ if page == "📤 Mesaj Gönder":
                         if not isinstance(preset, dict):
                             errors.append(f"- Preset bulunamadı: {template}")
                             continue
-                        preset_cat = preset.get("category", DEFAULT_CATEGORY)
+                        preset_cat = str(preset.get("category", DEFAULT_CATEGORY)).strip()
                         if preset_cat != row_cat:
                             errors.append(f"- Preset kategori uyumsuz ({ek_sec}/{preset_cat}) satır:{row_cat} → {template}")
                             continue
@@ -787,7 +764,7 @@ if page == "📤 Mesaj Gönder":
                     continue
                 time.sleep(0.25)
 
-            add_sent_today(sent_log, template)
+            db_add_sent(TODAY, template)
 
         if slack_errors:
             st.error("Bazı içerikler gönderilemedi:")
@@ -802,18 +779,17 @@ if page == "📤 Mesaj Gönder":
                 del st.session_state[k]
         st.rerun()
 
-
 # =================================================
-# ⚙️ AYARLAR
+# ⚙️ AYARLAR (DB)
 # =================================================
 if page == "⚙️ Ayarlar":
     st.title("⚙️ Ayarlar")
 
-    cfg = load_config()
-    categories = cfg.get("categories", [DEFAULT_CATEGORY])
-    variables = cfg.get("variables", {})
-    attachments = cfg.get("attachments", {})
+    categories = db_get_categories()
+    variables = db_get_variables()
+    attachments_all = db_get_attachments(include_expired=True)
 
+    # -------- Kategoriler --------
     st.subheader("Kategoriler")
     c1, c2 = st.columns([2, 5])
     new_cat = c1.text_input("Yeni kategori adı", placeholder="Kampanya", key="cat_new_name")
@@ -822,46 +798,23 @@ if page == "⚙️ Ayarlar":
         if not name:
             st.warning("Kategori adı boş olamaz.")
         else:
-            if name not in categories:
-                categories.append(name)
-                cfg["categories"] = categories
-                atomic_save_json(CONFIG_FILE, cfg)
-                st.success("Kategori eklendi ✅")
-                st.rerun()
-            else:
-                st.info("Bu kategori zaten var.")
+            db_add_category(name)
+            st.success("Kategori eklendi ✅")
+            st.rerun()
 
-    if categories:
-        st.write("Mevcut kategoriler:")
-        for cat in categories:
-            colA, colB = st.columns([6, 1])
-            colA.write(f"- **{cat}**")
-            disabled = (cat == DEFAULT_CATEGORY) or (len(categories) == 1)
-            if colB.button("🗑️", key=f"del_cat_{cat}", disabled=disabled):
-                categories = [c for c in categories if c != cat]
-                if DEFAULT_CATEGORY not in categories:
-                    categories.insert(0, DEFAULT_CATEGORY)
-
-                for d in DAY_KEYS:
-                    for r in cfg["days"].get(d, []):
-                        if str(r.get("category", DEFAULT_CATEGORY)) == cat:
-                            r["category"] = DEFAULT_CATEGORY
-
-                for _, vdef in list(cfg["variables"].items()):
-                    if isinstance(vdef, dict) and vdef.get("category") == cat:
-                        vdef["category"] = DEFAULT_CATEGORY
-
-                for _, adef in list(cfg["attachments"].items()):
-                    if isinstance(adef, dict) and adef.get("category") == cat:
-                        adef["category"] = DEFAULT_CATEGORY
-
-                cfg["categories"] = categories
-                atomic_save_json(CONFIG_FILE, cfg)
-                st.success("Kategori silindi, bağlı içerikler Genel’e taşındı ✅")
-                st.rerun()
+    st.write("Mevcut kategoriler:")
+    for cat in categories:
+        colA, colB = st.columns([6, 1])
+        colA.write(f"- **{cat}**")
+        disabled = (cat == DEFAULT_CATEGORY) or (len(categories) == 1)
+        if colB.button("🗑️", key=f"del_cat_{cat}", disabled=disabled):
+            db_delete_category(cat)
+            st.success("Kategori silindi, bağlı içerikler Genel’e taşındı ✅")
+            st.rerun()
 
     st.divider()
 
+    # -------- Günlük Satırlar --------
     st.subheader("Günlük Satırlar")
     selected_day_index = st.selectbox(
         "Hangi günün satırlarını düzenliyorsun?",
@@ -871,12 +824,12 @@ if page == "⚙️ Ayarlar":
         key="settings_day_select",
     )
     selected_day_key = DAY_KEYS[selected_day_index]
-    rows = cfg["days"].setdefault(selected_day_key, [])
+    rows = db_get_day_rows(selected_day_key)
 
     settings_df = pd.DataFrame({
-        "Metin": [str((r.get("text", "") if isinstance(r, dict) else "") or "") for r in rows],
-        "Kategori": [str((r.get("category", DEFAULT_CATEGORY) if isinstance(r, dict) else DEFAULT_CATEGORY) or DEFAULT_CATEGORY) for r in rows],
-        "Ek Zorunlu": [bool((r.get("requires_attachment", False) if isinstance(r, dict) else False)) for r in rows],
+        "Metin": [str(r.get("text", "") or "") for r in rows],
+        "Kategori": [str(r.get("category", DEFAULT_CATEGORY) or DEFAULT_CATEGORY) for r in rows],
+        "Ek Zorunlu": [bool(r.get("requires_attachment", False)) for r in rows],
     })
     settings_df["Metin"] = settings_df["Metin"].fillna("").astype(str)
     settings_df["Kategori"] = settings_df["Kategori"].fillna(DEFAULT_CATEGORY).astype(str)
@@ -905,12 +858,12 @@ if page == "⚙️ Ayarlar":
             if cat not in categories:
                 cat = DEFAULT_CATEGORY
             new_rows.append({"text": t, "requires_attachment": bool(r["Ek Zorunlu"]), "category": cat})
-        cfg["days"][selected_day_key] = new_rows
-        atomic_save_json(CONFIG_FILE, cfg)
+        db_replace_day_rows(selected_day_key, new_rows)
         st.success("Kaydedildi ✅")
         st.rerun()
 
     st.divider()
+
     st.subheader("Yeni Satır Ekle")
     new_text = st.text_input(
         "Mesaj",
@@ -925,21 +878,21 @@ if page == "⚙️ Ayarlar":
         if not t:
             st.warning("Mesaj boş olamaz.")
         else:
-            cfg["days"][selected_day_key].append({"text": t, "requires_attachment": bool(new_req), "category": new_cat2})
-            atomic_save_json(CONFIG_FILE, cfg)
+            db_add_day_row(selected_day_key, t, new_cat2, bool(new_req))
             st.success("Satır eklendi ✅")
             st.rerun()
 
     st.caption("İpucu: Değişken placeholder `{{Kampanya}}` gibi. Değişken kategorisi satır kategorisiyle aynı olmalı.")
 
     st.divider()
-    st.subheader("Değişkenler")
 
-    existing_vars = sorted(list(cfg.get("variables", {}).keys()))
+    # -------- Değişkenler --------
+    st.subheader("Değişkenler")
+    existing_vars = sorted(list(variables.keys()))
     pick = st.selectbox("Düzenlemek için mevcut değişken seç (opsiyonel)", options=["(Yeni)"] + existing_vars, key="var_pick")
 
     if pick != "(Yeni)":
-        vdef = cfg["variables"].get(pick, {})
+        vdef = variables.get(pick, {})
         default_name = pick
         default_cat = vdef.get("category", DEFAULT_CATEGORY) if isinstance(vdef, dict) else DEFAULT_CATEGORY
         default_opts = "\n".join(vdef.get("options", [])) if isinstance(vdef, dict) else ""
@@ -958,25 +911,25 @@ if page == "⚙️ Ayarlar":
             st.error("Değişken adı boş olamaz.")
         else:
             options = [x.strip() for x in (var_opts or "").splitlines() if x.strip()]
-            cfg["variables"][name] = {"category": var_cat, "options": options}
-            atomic_save_json(CONFIG_FILE, cfg)
+            db_upsert_variable(name, var_cat, options)
             st.success(f"Kaydedildi: {name} ✅")
             st.rerun()
 
     if bB.button("🗑️ Sil", disabled=(pick == "(Yeni)"), key="var_del"):
-        cfg["variables"].pop(pick, None)
-        atomic_save_json(CONFIG_FILE, cfg)
+        db_delete_variable(pick)
         st.success("Silindi ✅")
         st.rerun()
 
     st.divider()
+
+    # -------- Ek Presetleri --------
     st.subheader("Ek Presetleri (Lightshot URL)")
 
-    existing_atts = sorted(list(cfg.get("attachments", {}).keys()))
+    existing_atts = sorted(list(attachments_all.keys()))
     apick = st.selectbox("Düzenlemek için mevcut preset seç (opsiyonel)", options=["(Yeni)"] + existing_atts, key="att_pick")
 
     if apick != "(Yeni)":
-        adef = cfg["attachments"].get(apick, {})
+        adef = attachments_all.get(apick, {})
         default_att_name = apick
         default_att_cat = adef.get("category", DEFAULT_CATEGORY) if isinstance(adef, dict) else DEFAULT_CATEGORY
         default_att_url = adef.get("url", "") if isinstance(adef, dict) else ""
@@ -984,9 +937,14 @@ if page == "⚙️ Ayarlar":
         default_att_name, default_att_cat, default_att_url = "", DEFAULT_CATEGORY, ""
 
     a1, a2, a3 = st.columns([2, 2, 5])
-    att_name = a1.text_input("Ek Adı", value=default_att_name, placeholder="Limitli Satış Görseli", key="att_name")
+    att_name = a1.text_input("Ek Adı", value=default_att_name, placeholder="16 Aralık Limitli", key="att_name")
     att_cat = a2.selectbox("Kategori", options=categories, index=categories.index(default_att_cat) if default_att_cat in categories else 0, key="att_cat")
     att_url = a3.text_input("Lightshot / prnt.sc URL", value=default_att_url, placeholder="https://prnt.sc/xxxxxxx", key="att_url")
+
+    # valid_date: addaki TR tarihten otomatik
+    inferred_date = extract_tr_date_from_name((att_name or "").strip())
+    if inferred_date:
+        st.caption(f"🗓️ Tarih algılandı: {format_tr_date(inferred_date)} (bu tarihten önce otomatik gizlenir)")
 
     xA, xB, _ = st.columns([2, 2, 6])
     if xA.button("💾 Kaydet / Güncelle", key="att_save"):
@@ -995,13 +953,12 @@ if page == "⚙️ Ayarlar":
         if not n or not u:
             st.error("Ek adı ve URL zorunlu.")
         else:
-            cfg["attachments"][n] = {"category": att_cat, "url": u}
-            atomic_save_json(CONFIG_FILE, cfg)
+            vdate = extract_tr_date_from_name(n)  # yoksa NULL => süresiz
+            db_upsert_attachment(n, att_cat, u, vdate)
             st.success("Eklendi/Güncellendi ✅")
             st.rerun()
 
     if xB.button("🗑️ Sil", disabled=(apick == "(Yeni)"), key="att_del"):
-        cfg["attachments"].pop(apick, None)
-        atomic_save_json(CONFIG_FILE, cfg)
+        db_delete_attachment(apick)
         st.success("Silindi ✅")
         st.rerun()
