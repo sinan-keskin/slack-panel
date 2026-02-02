@@ -226,34 +226,48 @@ def db_delete_attachment(name: str):
     with get_conn().cursor() as cur:
         cur.execute("delete from attachments where name=%s", (name,))
 
-def db_get_sent_for_date(d: date):
-    with get_conn().cursor() as cur:
-        cur.execute("select template_text from sent_log where sent_date=%s order by id", (d,))
-        rows = cur.fetchall()
-    return [r[0] for r in rows]
+# ---------------- SENT LOG ----------------
+# user_key destekli; DB’de user_key yoksa fallback çalışır.
+def db_get_sent_for_date(d: date, user_key: str):
+    try:
+        with get_conn().cursor() as cur:
+            cur.execute("select template_text from sent_log where sent_date=%s and user_key=%s order by id", (d, user_key))
+            rows = cur.fetchall()
+        return [r[0] for r in rows]
+    except Exception:
+        with get_conn().cursor() as cur:
+            cur.execute("select template_text from sent_log where sent_date=%s order by id", (d,))
+            rows = cur.fetchall()
+        return [r[0] for r in rows]
 
-def db_get_sent_dates():
-    with get_conn().cursor() as cur:
-        cur.execute("select sent_date, count(*) from sent_log group by sent_date order by sent_date desc")
-        rows = cur.fetchall()
-    return rows
+def db_get_sent_dates(user_key: str):
+    try:
+        with get_conn().cursor() as cur:
+            cur.execute("select sent_date, count(*) from sent_log where user_key=%s group by sent_date order by sent_date desc", (user_key,))
+            rows = cur.fetchall()
+        return rows
+    except Exception:
+        with get_conn().cursor() as cur:
+            cur.execute("select sent_date, count(*) from sent_log group by sent_date order by sent_date desc")
+            rows = cur.fetchall()
+        return rows
 
-def db_get_sent_today_set(d: date):
-    return set(db_get_sent_for_date(d))
+def db_get_sent_today_set(d: date, user_key: str):
+    return set(db_get_sent_for_date(d, user_key))
 
-def db_add_sent(d: date, template_text: str):
-    # aynı gün aynı template tekrar eklenmesin
-    with get_conn().cursor() as cur:
-        cur.execute(
-            "select 1 from sent_log where sent_date=%s and template_text=%s limit 1",
-            (d, template_text),
-        )
-        if cur.fetchone():
-            return
-        cur.execute(
-            "insert into sent_log(sent_date, template_text) values (%s,%s)",
-            (d, template_text),
-        )
+def db_add_sent(d: date, template_text: str, user_key: str):
+    try:
+        with get_conn().cursor() as cur:
+            cur.execute("select 1 from sent_log where sent_date=%s and user_key=%s and template_text=%s limit 1", (d, user_key, template_text))
+            if cur.fetchone():
+                return
+            cur.execute("insert into sent_log(sent_date, user_key, template_text) values (%s,%s,%s)", (d, user_key, template_text))
+    except Exception:
+        with get_conn().cursor() as cur:
+            cur.execute("select 1 from sent_log where sent_date=%s and template_text=%s limit 1", (d, template_text))
+            if cur.fetchone():
+                return
+            cur.execute("insert into sent_log(sent_date, template_text) values (%s,%s)", (d, template_text))
 
 # ================== HELPERS ==================
 def extract_vars(text: str) -> list[str]:
@@ -299,13 +313,7 @@ def safe_filename_from_category(cat: str) -> str:
     base = cat[:60] if cat else "image"
     return f"{base}.png"
 
-def get_slack_client():
-    token = st.secrets.get("SLACK_USER_TOKEN", "")
-    if not token:
-        st.error("SLACK_USER_TOKEN secrets içinde yok.")
-        st.stop()
-    return WebClient(token=token)
-
+# ================== SLACK ==================
 def safe_chat_post(client: WebClient, channel_id: str, text: str):
     try:
         client.chat_postMessage(channel=channel_id, text=text)
@@ -354,15 +362,26 @@ def wait_until_file_visible(client: WebClient, channel_id: str, file_id: str, ti
         return False
     return False
 
-# ================== LOGIN ==================
+# ================== LOGIN (2 USER) ==================
 if "logged" not in st.session_state:
     st.session_state.logged = False
+if "user_key" not in st.session_state:
+    st.session_state.user_key = "user1"
 
 if not st.session_state.logged:
     st.title("🔐 Giriş")
     pw = st.text_input("Parola", type="password")
+
     if st.button("Giriş"):
-        if pw == st.secrets.get("APP_PASSWORD", ""):
+        pw1 = st.secrets.get("APP_PASSWORD", "")
+        pw2 = st.secrets.get("APP_PASSWORD_2", "")
+
+        if pw == pw1:
+            st.session_state.user_key = "user1"
+            st.session_state.logged = True
+            st.rerun()
+        elif pw2 and pw == pw2:
+            st.session_state.user_key = "user2"
             st.session_state.logged = True
             st.rerun()
         else:
@@ -373,14 +392,29 @@ if not st.session_state.logged:
 if "link_cache" not in st.session_state:
     st.session_state.link_cache = {}  # url -> bool
 
-client = get_slack_client()
-channel_id = st.secrets.get("SLACK_CHANNEL_ID", "")
+USER_KEY = st.session_state.get("user_key", "user1")
+
+# Slack token + channel seçimi
+if USER_KEY == "user2":
+    token = st.secrets.get("SLACK_USER_TOKEN_2", "")
+    channel_id = st.secrets.get("SLACK_CHANNEL_ID_2", "")
+else:
+    token = st.secrets.get("SLACK_USER_TOKEN", "")
+    channel_id = st.secrets.get("SLACK_CHANNEL_ID", "")
+
+if not token:
+    st.error("Slack token secrets içinde yok.")
+    st.stop()
+
+client = WebClient(token=token)
+
 if not channel_id:
     st.error("SLACK_CHANNEL_ID secrets içinde yok.")
     st.stop()
 
 # Menü
 page = st.sidebar.radio("Menü", ["📤 Mesaj Gönder", "📜 Gönderim Logu", "⚙️ Ayarlar"])
+st.sidebar.caption(f"👤 Aktif kullanıcı: {USER_KEY}")
 
 # =================================================
 # 📜 GÖNDERİM LOGU (DB)
@@ -391,10 +425,10 @@ if page == "📜 Gönderim Logu":
     st.divider()
 
     selected_date = st.date_input("Tarih seç", value=TODAY)
-    items = db_get_sent_for_date(selected_date)
+    items = db_get_sent_for_date(selected_date, USER_KEY)
 
     # özet
-    all_dates = db_get_sent_dates()
+    all_dates = db_get_sent_dates(USER_KEY)
     c1, c2, _ = st.columns([2, 2, 6])
     c1.metric("Toplam gün", len(all_dates))
     c2.metric("Seçilen gün gönderilen", len(items))
@@ -425,7 +459,7 @@ if page == "📤 Mesaj Gönder":
     categories = db_get_categories()
     variables = db_get_variables()
     attachments = db_get_attachments(include_expired=False)  # sadece geçerli olanlar
-    sent_today = db_get_sent_today_set(TODAY)
+    sent_today = db_get_sent_today_set(TODAY, USER_KEY)
 
     rows_today = db_get_day_rows(DAY_KEY)
     visible_rows = [r for r in rows_today if str(r.get("text", "") or "") not in sent_today]
@@ -444,9 +478,9 @@ if page == "📤 Mesaj Gönder":
             c = DEFAULT_CATEGORY
         row_categories.append(c)
 
-    table_key = f"table_{DAY_KEY}_{TODAY_KEY}"
-    templates_key = f"templates_{DAY_KEY}_{TODAY_KEY}"
-    vars_key = f"vars_{DAY_KEY}_{TODAY_KEY}"
+    table_key = f"table_{DAY_KEY}_{TODAY_KEY}_{USER_KEY}"
+    templates_key = f"templates_{DAY_KEY}_{TODAY_KEY}_{USER_KEY}"
+    vars_key = f"vars_{DAY_KEY}_{TODAY_KEY}_{USER_KEY}"
 
     if table_key not in st.session_state:
         df_dict = {
@@ -502,7 +536,7 @@ if page == "📤 Mesaj Gönder":
         df_in,
         width="stretch",
         hide_index=True,
-        key=f"editor_{DAY_KEY}_{TODAY_KEY}",
+        key=f"editor_{DAY_KEY}_{TODAY_KEY}_{USER_KEY}",
         column_config=column_config,
         disabled=["Ek Zorunlu"],
     )
@@ -558,7 +592,6 @@ if page == "📤 Mesaj Gönder":
 
             # Manuel seçiliyse link boş değilse dokunma (kullanıcı yazabilir)
             if str(df_out.at[idx, "Ek Seç"]).strip() == MANUAL_OPTION:
-                # prnt.sc değilse gönderimde hata verecek; burada sadece karışıklığı engellemiyoruz
                 pass
 
         # Değişken kolonları: sadece seçim + kategori uyumu
@@ -764,7 +797,7 @@ if page == "📤 Mesaj Gönder":
                     continue
                 time.sleep(0.25)
 
-            db_add_sent(TODAY, template)
+            db_add_sent(TODAY, template, USER_KEY)
 
         if slack_errors:
             st.error("Bazı içerikler gönderilemedi:")
@@ -962,4 +995,3 @@ if page == "⚙️ Ayarlar":
         db_delete_attachment(apick)
         st.success("Silindi ✅")
         st.rerun()
-
