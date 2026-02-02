@@ -366,7 +366,7 @@ def wait_until_file_visible(client: WebClient, channel_id: str, file_id: str, ti
 if "logged" not in st.session_state:
     st.session_state.logged = False
 if "user_key" not in st.session_state:
-    st.session_state.user_key = "user1"
+    st.session_state.user_key = "Sinan"
 
 if not st.session_state.logged:
     st.title("🔐 Giriş")
@@ -377,11 +377,11 @@ if not st.session_state.logged:
         pw2 = st.secrets.get("APP_PASSWORD_2", "")
 
         if pw == pw1:
-            st.session_state.user_key = "user1"
+            st.session_state.user_key = "Sinan"
             st.session_state.logged = True
             st.rerun()
         elif pw2 and pw == pw2:
-            st.session_state.user_key = "user2"
+            st.session_state.user_key = "Yağmur"
             st.session_state.logged = True
             st.rerun()
         else:
@@ -392,10 +392,10 @@ if not st.session_state.logged:
 if "link_cache" not in st.session_state:
     st.session_state.link_cache = {}  # url -> bool
 
-USER_KEY = st.session_state.get("user_key", "user1")
+USER_KEY = st.session_state.get("user_key", "Sinan")
 
 # Slack token + channel seçimi
-if USER_KEY == "user2":
+if USER_KEY == "Yağmur":
     token = st.secrets.get("SLACK_USER_TOKEN_2", "")
     channel_id = st.secrets.get("SLACK_CHANNEL_ID_2", "")
 else:
@@ -995,3 +995,4 @@ if page == "⚙️ Ayarlar":
         db_delete_attachment(apick)
         st.success("Silindi ✅")
         st.rerun()
+
