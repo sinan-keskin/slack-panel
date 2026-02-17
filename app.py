@@ -1,3 +1,13 @@
+# app.py
+# ============================================================
+# ✅ GEREKEN DB MIGRATION (Supabase SQL Editor'da 1 kere çalıştır)
+#
+# alter table sent_log add column if not exists day_row_id bigint;
+# create unique index if not exists sent_log_unique_day_row on sent_log (sent_date, day_row_id);
+# -- (isteğe bağlı) eski template bazlı index varsa kaldır:
+# drop index if exists sent_log_unique_day_template;
+# ============================================================
+
 import streamlit as st
 import requests
 import re
@@ -10,6 +20,71 @@ import time
 import psycopg
 
 st.set_page_config(page_title="SinanKee", layout="wide", initial_sidebar_state="collapsed")
+
+# ================== MODERN THEME (CSS) ==================
+MODERN_CSS = """
+<style>
+:root{
+  --bg0:#0b0f17; --bg1:#0f172a; --card:#0b1220; --card2:#0b1326;
+  --stroke:rgba(255,255,255,.08); --stroke2:rgba(255,255,255,.12);
+  --text:rgba(255,255,255,.92); --muted:rgba(255,255,255,.62);
+  --brand:#22c55e; --brand2:#06b6d4; --warn:#f59e0b; --bad:#ef4444;
+  --radius:14px;
+}
+html, body, [data-testid="stAppViewContainer"]{
+  background: radial-gradient(1200px 800px at 20% 0%, rgba(34,197,94,.08), transparent 55%),
+              radial-gradient(1000px 700px at 80% 20%, rgba(6,182,212,.10), transparent 55%),
+              linear-gradient(180deg, var(--bg0), var(--bg1));
+  color: var(--text) !important;
+}
+[data-testid="stHeader"]{ background: transparent; }
+[data-testid="stToolbar"]{ opacity:.7; }
+
+.block-card{
+  background: linear-gradient(180deg, rgba(255,255,255,.04), rgba(255,255,255,.02));
+  border: 1px solid var(--stroke);
+  border-radius: var(--radius);
+  padding: 16px 16px;
+  box-shadow: 0 12px 30px rgba(0,0,0,.25);
+}
+.kicker{ color: var(--muted); font-size: 13px; }
+.h-title{ font-size: 28px; font-weight: 750; letter-spacing: .2px; margin: 0 0 6px 0; }
+.sub{ color: var(--muted); margin: 0 0 6px 0; }
+.badge{
+  display:inline-flex; gap:8px; align-items:center;
+  border:1px solid var(--stroke); border-radius: 999px;
+  padding: 6px 10px; background: rgba(255,255,255,.03);
+  color: var(--muted); font-size: 12px;
+}
+.badge-dot{ width:8px; height:8px; border-radius:999px; background: var(--brand); }
+hr{ border-color: var(--stroke) !important; }
+
+[data-testid="stDataFrame"], [data-testid="stTable"]{
+  border: 1px solid var(--stroke) !important;
+  border-radius: var(--radius) !important;
+  overflow: hidden !important;
+}
+[data-testid="stExpander"]{
+  border: 1px solid var(--stroke) !important;
+  border-radius: var(--radius) !important;
+  background: rgba(255,255,255,.02) !important;
+}
+button[kind="primary"]{
+  border-radius: 12px !important;
+  border: 1px solid rgba(34,197,94,.35) !important;
+  background: linear-gradient(90deg, rgba(34,197,94,.20), rgba(6,182,212,.18)) !important;
+}
+button[kind="secondary"], button{
+  border-radius: 12px !important;
+}
+input, textarea{
+  border-radius: 12px !important;
+}
+.small-muted{ color: var(--muted); font-size: 12px; }
+</style>
+"""
+st.markdown(MODERN_CSS, unsafe_allow_html=True)
+
 
 # ================== CONSTANTS ==================
 TODAY = date.today()
@@ -50,7 +125,6 @@ DATE_PREFIX_RE = re.compile(
     re.UNICODE
 )
 
-
 def extract_tr_date_from_name(name: str):
     """'16 Aralık Ek Limitli' -> date(YYYY,12,16). Yıl yoksa bu yıl."""
     if not name:
@@ -69,9 +143,7 @@ def extract_tr_date_from_name(name: str):
     except ValueError:
         return None
 
-
 def format_tr_date(d: date) -> str:
-    """Locale'e bakmadan TR tarih basar: 16 Aralık 2025"""
     return f"{d.day:02d} {TR_MONTH_NAMES[d.month]} {d.year}"
 
 
@@ -84,7 +156,6 @@ def get_conn():
         st.stop()
     return psycopg.connect(db_url, autocommit=True)
 
-
 def db_get_categories():
     with get_conn().cursor() as cur:
         cur.execute("select name from categories order by name")
@@ -94,14 +165,12 @@ def db_get_categories():
         cats.insert(0, DEFAULT_CATEGORY)
     return cats
 
-
 def db_add_category(name: str):
     name = (name or "").strip()
     if not name:
         return
     with get_conn().cursor() as cur:
         cur.execute("insert into categories(name) values (%s) on conflict do nothing", (name,))
-
 
 def db_delete_category(name: str):
     name = (name or "").strip()
@@ -112,7 +181,6 @@ def db_delete_category(name: str):
         cur.execute("update variables set category=%s where category=%s", (DEFAULT_CATEGORY, name))
         cur.execute("update attachments set category=%s where category=%s", (DEFAULT_CATEGORY, name))
         cur.execute("delete from categories where name=%s and name<>%s", (name, DEFAULT_CATEGORY))
-
 
 def db_get_day_rows(day_key: str):
     with get_conn().cursor() as cur:
@@ -127,10 +195,9 @@ def db_get_day_rows(day_key: str):
         )
         rows = cur.fetchall()
     return [
-        {"id": r[0], "text": r[1], "category": r[2], "requires_attachment": bool(r[3])}
+        {"id": int(r[0]), "text": r[1], "category": r[2], "requires_attachment": bool(r[3])}
         for r in rows
     ]
-
 
 def db_replace_day_rows(day_key: str, new_rows: list[dict]):
     with get_conn().cursor() as cur:
@@ -144,7 +211,6 @@ def db_replace_day_rows(day_key: str, new_rows: list[dict]):
                 (day_key, r["text"], r["category"], bool(r.get("requires_attachment", False))),
             )
 
-
 def db_add_day_row(day_key: str, text: str, category: str, requires_attachment: bool):
     with get_conn().cursor() as cur:
         cur.execute(
@@ -154,7 +220,6 @@ def db_add_day_row(day_key: str, text: str, category: str, requires_attachment: 
             """,
             (day_key, text, category, bool(requires_attachment)),
         )
-
 
 def db_get_variables():
     out = {}
@@ -166,7 +231,6 @@ def db_get_variables():
             opts = [x[0] for x in cur.fetchall()]
             out[name] = {"category": cat, "options": opts}
     return out
-
 
 def db_upsert_variable(name: str, category: str, options: list[str]):
     name = (name or "").strip()
@@ -187,14 +251,12 @@ def db_upsert_variable(name: str, category: str, options: list[str]):
         for o in options:
             cur.execute("insert into variable_options(variable_name, value) values (%s,%s)", (name, o))
 
-
 def db_delete_variable(name: str):
     name = (name or "").strip()
     if not name:
         return
     with get_conn().cursor() as cur:
         cur.execute("delete from variables where name=%s", (name,))
-
 
 def db_get_attachments(include_expired: bool):
     with get_conn().cursor() as cur:
@@ -215,7 +277,6 @@ def db_get_attachments(include_expired: bool):
         out[name] = {"category": cat, "url": url, "valid_date": vdate}
     return out
 
-
 def db_upsert_attachment(name: str, category: str, url: str, valid_date):
     name = (name or "").strip()
     url = (url or "").strip()
@@ -233,7 +294,6 @@ def db_upsert_attachment(name: str, category: str, url: str, valid_date):
             (name, category, url, valid_date),
         )
 
-
 def db_delete_attachment(name: str):
     name = (name or "").strip()
     if not name:
@@ -241,102 +301,81 @@ def db_delete_attachment(name: str):
     with get_conn().cursor() as cur:
         cur.execute("delete from attachments where name=%s", (name,))
 
-
-# ---------------- SENT LOG ----------------
-# user_key destekli; DB’de user_key yoksa fallback çalışır.
-def db_get_sent_for_date(d: date, user_key: str):
-    try:
-        with get_conn().cursor() as cur:
-            cur.execute(
-                "select template_text from sent_log where sent_date=%s and user_key=%s order by id",
-                (d, user_key),
-            )
-            rows = cur.fetchall()
-        return [r[0] for r in rows]
-    except Exception:
-        with get_conn().cursor() as cur:
-            cur.execute("select template_text from sent_log where sent_date=%s order by id", (d,))
-            rows = cur.fetchall()
-        return [r[0] for r in rows]
-
-
-def db_get_sent_dates(user_key: str):
-    try:
-        with get_conn().cursor() as cur:
-            cur.execute(
-                "select sent_date, count(*) from sent_log where user_key=%s group by sent_date order by sent_date desc",
-                (user_key,),
-            )
-            rows = cur.fetchall()
-        return rows
-    except Exception:
-        with get_conn().cursor() as cur:
-            cur.execute("select sent_date, count(*) from sent_log group by sent_date order by sent_date desc")
-            rows = cur.fetchall()
-        return rows
-
-
-def db_get_sent_today_set(d: date, user_key: str):
-    return set(db_get_sent_for_date(d, user_key))
-
-
-def db_add_sent(d: date, template_text: str, user_key: str):
-    try:
-        with get_conn().cursor() as cur:
-            cur.execute(
-                "select 1 from sent_log where sent_date=%s and user_key=%s and template_text=%s limit 1",
-                (d, user_key, template_text),
-            )
-            if cur.fetchone():
-                return
-            cur.execute(
-                "insert into sent_log(sent_date, user_key, template_text) values (%s,%s,%s)",
-                (d, user_key, template_text),
-            )
-    except Exception:
-        with get_conn().cursor() as cur:
-            cur.execute(
-                "select 1 from sent_log where sent_date=%s and template_text=%s limit 1",
-                (d, template_text),
-            )
-            if cur.fetchone():
-                return
-            cur.execute(
-                "insert into sent_log(sent_date, template_text) values (%s,%s)",
-                (d, template_text),
-            )
-
-
-# ---- GLOBAL SENT (iki kullanıcı ortak) ----
-def db_get_sent_for_date_all_users(d: date):
-    """O gün kim gönderirse göndersin, tüm template_text'leri döndürür."""
+# ---------------- SENT LOG (day_row_id bazlı) ----------------
+def db_get_sent_day_row_ids_for_date(d: date) -> set[int]:
     with get_conn().cursor() as cur:
-        cur.execute("select template_text from sent_log where sent_date=%s order by id", (d,))
+        cur.execute(
+            "select day_row_id from sent_log where sent_date=%s and day_row_id is not null",
+            (d,),
+        )
         rows = cur.fetchall()
-    return [r[0] for r in rows] if rows else []
-
-
-def db_get_sent_today_set_global(d: date):
-    return set(db_get_sent_for_date_all_users(d))
-
+    return set(int(r[0]) for r in rows if r and r[0] is not None)
 
 def db_get_sent_rows_for_date(d: date):
-    """Log ekranı için: kim + ne gönderdi (user_key yoksa 'Bilinmiyor')."""
+    """Log ekranı için tablo: sıra + kullanıcı + day_row_id + mesaj"""
     with get_conn().cursor() as cur:
-        try:
-            cur.execute(
-                "select id, user_key, template_text from sent_log where sent_date=%s order by id",
-                (d,),
-            )
-            rows = cur.fetchall()
-            return [{"Sıra": r[0], "Kullanıcı": r[1], "Mesaj": r[2]} for r in rows]
-        except Exception:
-            cur.execute(
-                "select id, template_text from sent_log where sent_date=%s order by id",
-                (d,),
-            )
-            rows = cur.fetchall()
-            return [{"Sıra": r[0], "Kullanıcı": "Bilinmiyor", "Mesaj": r[1]} for r in rows]
+        cur.execute(
+            """
+            select id, sent_date, coalesce(user_key,'') as user_key, day_row_id, template_text
+            from sent_log
+            where sent_date=%s
+            order by id
+            """,
+            (d,),
+        )
+        rows = cur.fetchall()
+    out = []
+    for rid, sdate, ukey, day_row_id, text in rows:
+        out.append({
+            "ID": int(rid),
+            "Tarih": str(sdate),
+            "Kullanıcı": (ukey or "Bilinmiyor"),
+            "DayRowID": int(day_row_id) if day_row_id is not None else None,
+            "Mesaj": text,
+        })
+    return out
+
+def db_get_log_dates_summary():
+    """Tüm kullanıcılar: gün başına adet"""
+    with get_conn().cursor() as cur:
+        cur.execute(
+            "select sent_date, count(*) from sent_log group by sent_date order by sent_date desc"
+        )
+        rows = cur.fetchall()
+    return rows
+
+def db_try_reserve_send(d: date, day_row_id: int, template_text: str, user_key: str) -> bool:
+    """
+    Atomik kilit: aynı gün aynı day_row_id sadece 1 kez.
+    True -> bu kullanıcı gönderebilir
+    False -> başka biri zaten rezerve etti / gönderdi
+    """
+    if not day_row_id:
+        return False
+    template_text = (template_text or "").strip()
+
+    with get_conn().cursor() as cur:
+        cur.execute(
+            """
+            insert into sent_log(sent_date, user_key, day_row_id, template_text)
+            values (%s, %s, %s, %s)
+            on conflict (sent_date, day_row_id) do nothing
+            returning id
+            """,
+            (d, user_key, int(day_row_id), template_text),
+        )
+        row = cur.fetchone()
+        return bool(row)
+
+def db_unreserve_send(d: date, day_row_id: int):
+    """Slack başarısızsa, retry için kilidi kaldır."""
+    if not day_row_id:
+        return
+    with get_conn().cursor() as cur:
+        cur.execute(
+            "delete from sent_log where sent_date=%s and day_row_id=%s",
+            (d, int(day_row_id)),
+        )
 
 
 # ================== HELPERS ==================
@@ -345,13 +384,11 @@ def extract_vars(text: str) -> list[str]:
         return []
     return [m.group(1).strip() for m in VAR_PATTERN.finditer(text) if m.group(1).strip()]
 
-
 def looks_like_lightshot(url: str) -> bool:
     if not url:
         return False
     u = url.strip().lower()
     return ("prnt.sc/" in u) or ("prntscr.com" in u) or ("image.prntscr.com" in u)
-
 
 def fetch_lightshot_image(prnt_url: str):
     headers = {"User-Agent": "Mozilla/5.0"}
@@ -370,14 +407,12 @@ def fetch_lightshot_image(prnt_url: str):
         return None
     return None
 
-
 def strip_anchors(text: str) -> str:
     if not text:
         return text
     text = ANCHOR_HTML.sub(r"\1", text)
     text = ANCHOR_MD.sub(r"\1", text)
     return text
-
 
 def safe_filename_from_category(cat: str) -> str:
     cat = (cat or "image").strip()
@@ -397,7 +432,6 @@ def safe_chat_post(client: WebClient, channel_id: str, text: str):
     except Exception as e:
         return f"chat_postMessage: {e}"
 
-
 def safe_upload_image_with_comment(client: WebClient, channel_id: str, bio: BytesIO, message: str, filename: str):
     try:
         bio.seek(0)
@@ -414,23 +448,6 @@ def safe_upload_image_with_comment(client: WebClient, channel_id: str, bio: Byte
         return None, f"files_upload_v2: {e}"
 
 
-# (Kullanıcı token’ında history scope vermek istemiyorsan, bu fonksiyonu hiç çağırma)
-def wait_until_file_visible(client: WebClient, channel_id: str, file_id: str, timeout_sec: float = 8.0) -> bool:
-    start = time.time()
-    try:
-        while time.time() - start < timeout_sec:
-            hist = client.conversations_history(channel=channel_id, limit=10)
-            msgs = hist.get("messages", [])
-            for m in msgs:
-                for f in (m.get("files") or []):
-                    if f.get("id") == file_id:
-                        return True
-            time.sleep(0.35)
-    except Exception:
-        return False
-    return False
-
-
 # ================== LOGIN (2 USER) ==================
 if "logged" not in st.session_state:
     st.session_state.logged = False
@@ -438,10 +455,12 @@ if "user_key" not in st.session_state:
     st.session_state.user_key = "Sinan"
 
 if not st.session_state.logged:
-    st.title("🔐 Giriş")
+    st.markdown('<div class="block-card">', unsafe_allow_html=True)
+    st.markdown('<div class="h-title">🔐 Giriş</div>', unsafe_allow_html=True)
+    st.markdown('<div class="sub">Parolanı gir.</div>', unsafe_allow_html=True)
     pw = st.text_input("Parola", type="password")
 
-    if st.button("Giriş"):
+    if st.button("Giriş", type="primary"):
         pw1 = st.secrets.get("APP_PASSWORD", "")
         pw2 = st.secrets.get("APP_PASSWORD_2", "")
 
@@ -455,7 +474,9 @@ if not st.session_state.logged:
             st.rerun()
         else:
             st.error("Parola yanlış")
+    st.markdown('</div>', unsafe_allow_html=True)
     st.stop()
+
 
 # ================== STATE ==================
 if "link_cache" not in st.session_state:
@@ -469,7 +490,7 @@ if "checking_links" not in st.session_state:
 USER_KEY = st.session_state.get("user_key", "Sinan")
 IS_SINAN = (USER_KEY == "Sinan")
 
-# Slack token + channel seçimi
+# Slack token + channel seçimi (user token)
 if USER_KEY == "Yağmur":
     token = st.secrets.get("SLACK_USER_TOKEN_2", "")
     channel_id = st.secrets.get("SLACK_CHANNEL_ID_2", "")
@@ -480,12 +501,11 @@ else:
 if not token:
     st.error("Slack token secrets içinde yok.")
     st.stop()
-
-client = WebClient(token=token)
-
 if not channel_id:
     st.error("SLACK_CHANNEL_ID secrets içinde yok.")
     st.stop()
+
+client = WebClient(token=token)
 
 # Menü (rol bazlı)
 if IS_SINAN:
@@ -511,56 +531,69 @@ if page == "📜 Gönderim Logu":
         st.error("Bu sayfaya erişimin yok.")
         st.stop()
 
-    st.title("📜 Gönderim Logu")
-    st.caption("Supabase DB içinden seçtiğin tarihe ait gönderilen satırları tablo halinde gösterir.")
-    st.divider()
+    st.markdown('<div class="block-card">', unsafe_allow_html=True)
+    st.markdown('<div class="h-title">📜 Gönderim Logu</div>', unsafe_allow_html=True)
+    st.markdown('<div class="sub">Seçtiğin tarihte kim ne göndermiş, tablo halinde.</div>', unsafe_allow_html=True)
 
     selected_date = st.date_input("Tarih seç", value=TODAY)
 
     rows_log = db_get_sent_rows_for_date(selected_date)
+    all_dates = db_get_log_dates_summary()
 
-    all_dates = db_get_sent_dates(USER_KEY)
-    c1, c2, _ = st.columns([2, 2, 6])
+    c1, c2, c3 = st.columns([2, 2, 6])
     c1.metric("Toplam gün", len(all_dates))
     c2.metric("Seçilen gün gönderilen", len(rows_log))
+    c3.markdown(
+        f'<span class="badge"><span class="badge-dot"></span> Global kilit aktif: aynı satır aynı gün 1 kere</span>',
+        unsafe_allow_html=True
+    )
+
+    st.divider()
 
     if not rows_log:
         st.info("Bu tarih için kayıt yok.")
     else:
-        st.markdown("### Gönderilenler (Tablo)")
         df_log = pd.DataFrame(rows_log)
         st.dataframe(df_log, width="stretch", hide_index=True)
 
     st.divider()
     with st.expander("Tüm günleri özetle"):
         if all_dates:
-            df = pd.DataFrame([{"Tarih": d.isoformat(), "Adet": c} for d, c in all_dates])
+            df = pd.DataFrame([{"Tarih": str(d), "Adet": int(c)} for d, c in all_dates])
             st.dataframe(df, width="stretch", hide_index=True)
         else:
             st.write("Log boş.")
+    st.markdown('</div>', unsafe_allow_html=True)
 
 # =================================================
-# 📤 MESAJ GÖNDER (DB)
+# 📤 MESAJ GÖNDER
 # =================================================
 if page == "📤 Mesaj Gönder":
-    st.title("AksiyonKee")
-    st.caption(f"📅 {DAYS_TR[TODAY.weekday()]} — {format_tr_date(TODAY)}")
+    st.markdown('<div class="block-card">', unsafe_allow_html=True)
+    st.markdown('<div class="h-title">AksiyonKee</div>', unsafe_allow_html=True)
+    st.markdown(
+        f'<div class="sub">📅 {DAYS_TR[TODAY.weekday()]} — {format_tr_date(TODAY)}</div>',
+        unsafe_allow_html=True
+    )
+    st.markdown(f'<span class="badge"><span class="badge-dot"></span> Aktif kullanıcı: <b>{USER_KEY}</b></span>', unsafe_allow_html=True)
     st.divider()
 
     categories = db_get_categories()
     variables = db_get_variables()
     attachments = db_get_attachments(include_expired=False)
 
-    # ✅ GLOBAL: Kim gönderirse göndersin, iki kullanıcıda da satır gizlensin
-    sent_today = db_get_sent_today_set_global(TODAY)
+    # ✅ Global gizleme: day_row_id bazlı
+    sent_ids_today = db_get_sent_day_row_ids_for_date(TODAY)
 
     rows_today = db_get_day_rows(DAY_KEY)
-    visible_rows = [r for r in rows_today if str(r.get("text", "") or "") not in sent_today]
+    visible_rows = [r for r in rows_today if int(r.get("id")) not in sent_ids_today]
 
     if not visible_rows:
-        st.info("Bugün için gönderilecek yeni bir satır yok.")
+        st.success("Bugün için gönderilecek yeni bir satır yok ✅")
+        st.markdown('</div>', unsafe_allow_html=True)
         st.stop()
 
+    row_ids = [int(r["id"]) for r in visible_rows]
     templates = [str(r.get("text", "") or "") for r in visible_rows]
     vars_today = sorted({v for t in templates for v in extract_vars(t)})
 
@@ -574,7 +607,9 @@ if page == "📤 Mesaj Gönder":
     table_key = f"table_{DAY_KEY}_{TODAY_KEY}_{USER_KEY}"
     templates_key = f"templates_{DAY_KEY}_{TODAY_KEY}_{USER_KEY}"
     vars_key = f"vars_{DAY_KEY}_{TODAY_KEY}_{USER_KEY}"
+    rowids_key = f"rowids_{DAY_KEY}_{TODAY_KEY}_{USER_KEY}"
 
+    # İlk kurulum
     if table_key not in st.session_state:
         df_dict = {
             "Gönder": [True] * len(templates),
@@ -591,22 +626,46 @@ if page == "📤 Mesaj Gönder":
         st.session_state[table_key] = pd.DataFrame(df_dict)
         st.session_state[templates_key] = templates
         st.session_state[vars_key] = vars_today
+        st.session_state[rowids_key] = row_ids
 
-    b1, b2, b3, _ = st.columns([1, 1.6, 1.8, 6])
+    # Eğer başka kullanıcı gönderip satır sayısı değiştiyse, mevcut tabloyu "prune" et
+    # (UI anlık olmasa bile: duplicate zaten DB kilidiyle imkansız)
+    current_rowids = st.session_state.get(rowids_key, [])
+    live_rowids = row_ids  # şu an DB'ye göre görünür id'ler
+    if set(current_rowids) != set(live_rowids):
+        # Sadece hâlâ görünür olanları tut
+        df_old = st.session_state[table_key].copy()
+        old_ids = list(current_rowids)
+        keep_idx = [i for i, rid in enumerate(old_ids) if rid in set(live_rowids)]
+        df_new = df_old.iloc[keep_idx].reset_index(drop=True)
+
+        # yeni id sırasını aynı keep_idx ile güncelle
+        new_ids = [old_ids[i] for i in keep_idx]
+
+        st.session_state[table_key] = df_new
+        st.session_state[templates_key] = [templates[live_rowids.index(rid)] for rid in new_ids]
+        st.session_state[rowids_key] = new_ids
+        # vars_key değişmesin (bugünlük yeterli)
+        st.caption("ℹ️ Başka kullanıcı gönderim yaptı: liste güncellendi.")
+        st.rerun()
+
+    b1, b2, b3, b4 = st.columns([1.2, 1.6, 2.0, 5.2])
     if b1.button("✅ Tümünü Seç", disabled=st.session_state.sending or st.session_state.checking_links):
         st.session_state[table_key]["Gönder"] = True
         st.rerun()
+
     if b2.button("⛔ Tüm Seçimi Kaldır", disabled=st.session_state.sending or st.session_state.checking_links):
         st.session_state[table_key]["Gönder"] = False
         st.rerun()
-    do_check = b3.button(
-        "🔎 Linkleri Kontrol Et",
-        disabled=st.session_state.checking_links or st.session_state.sending
-    )
+
+    do_check = b3.button("🔎 Linkleri Kontrol Et", disabled=st.session_state.sending or st.session_state.checking_links)
+
+    st.markdown('<div class="small-muted">Not: Aynı satır aynı gün yalnızca 1 kere gönderilir (DB atomik kilit).</div>', unsafe_allow_html=True)
 
     df_in = st.session_state[table_key].copy()
     templates = st.session_state[templates_key]
     vars_today = st.session_state[vars_key]
+    row_ids = st.session_state[rowids_key]
 
     column_config = {
         "Gönder": st.column_config.CheckboxColumn("Gönder"),
@@ -637,7 +696,7 @@ if page == "📤 Mesaj Gönder":
         disabled=["Ek Zorunlu"],
     )
 
-    # ============== AUTO-CLEAN (sadece kategori normalize + ek zorunlu değilse ek alanlarını boşalt) ==============
+    # Minimal normalize (kullanıcının yazdığını "gereksiz silmeyelim")
     cleaned = False
     for idx in range(len(df_out)):
         req = bool(df_out.at[idx, "Ek Zorunlu"])
@@ -657,9 +716,10 @@ if page == "📤 Mesaj Gönder":
     if cleaned:
         st.session_state[table_key] = df_out
         st.rerun()
+
     st.session_state[table_key] = df_out
 
-    # ============== LINK CHECK (LOCKLU) ==============
+    # ============== LINK CHECK ==============
     if do_check and not st.session_state.checking_links:
         st.session_state.checking_links = True
         st.rerun()
@@ -717,18 +777,17 @@ if page == "📤 Mesaj Gönder":
 
     st.divider()
 
-    # ============== SEND (LOCK) ==============
+    # ============== SEND (BUTTON LOCK + ATOMİK KİLİT) ==============
     send_click = st.button(
         "Slack’e Gönder",
+        type="primary",
         disabled=st.session_state.sending or st.session_state.checking_links,
     )
 
-    # 1) tıklanınca kilitle + rerun
     if send_click and not st.session_state.sending:
         st.session_state.sending = True
         st.rerun()
 
-    # 2) gerçek gönderim
     if st.session_state.sending:
         try:
             errors = []
@@ -741,6 +800,7 @@ if page == "📤 Mesaj Gönder":
                 if not bool(row["Gönder"]):
                     continue
 
+                day_row_id = int(row_ids[i])
                 template = templates[i]
                 message = str(row["Mesaj"]).strip()
                 req = bool(row["Ek Zorunlu"])
@@ -811,7 +871,7 @@ if page == "📤 Mesaj Gönder":
                     errors.append(f"- Mesaj boş: {template}")
                     continue
 
-                send_items.append((template, message, fetched_img, row_cat))
+                send_items.append((day_row_id, template, message, fetched_img, row_cat))
 
             if errors:
                 st.session_state.sending = False
@@ -826,40 +886,42 @@ if page == "📤 Mesaj Gönder":
                 st.stop()
 
             slack_errors = []
+            sent_count = 0
+            skipped_locked = 0
 
-            for template, message, fetched_img, row_cat in send_items:
+            prog = st.progress(0.0)
+            status = st.empty()
+
+            for idx, (day_row_id, template, message, fetched_img, row_cat) in enumerate(send_items, start=1):
+                # 🔒 Atomik kilit (tam anlık çakışma engeli)
+                reserved = db_try_reserve_send(TODAY, day_row_id, template, USER_KEY)
+                if not reserved:
+                    skipped_locked += 1
+                    prog.progress(idx / max(1, len(send_items)))
+                    continue
+
+                status.info(f"Gönderiliyor… ({idx}/{len(send_items)})")
+
                 if fetched_img is not None:
                     filename = safe_filename_from_category(row_cat)
-                    resp, err = safe_upload_image_with_comment(
-                        client, channel_id, fetched_img, message=message, filename=filename
-                    )
+                    resp, err = safe_upload_image_with_comment(client, channel_id, fetched_img, message=message, filename=filename)
                     if err:
+                        db_unreserve_send(TODAY, day_row_id)
                         slack_errors.append(f"- {template}: {err}")
+                        prog.progress(idx / max(1, len(send_items)))
                         continue
-
-                    # history izni yoksa bunu kapat: sadece sleep yeter
-                    try:
-                        file_id = None
-                        if isinstance(resp, dict):
-                            f = resp.get("file")
-                            if isinstance(f, dict):
-                                file_id = f.get("id")
-                        if file_id:
-                            wait_until_file_visible(client, channel_id, file_id, timeout_sec=6.0)
-                    except Exception:
-                        pass
-
-                    time.sleep(0.6)
-
+                    time.sleep(0.35)
                 else:
                     err = safe_chat_post(client, channel_id, message)
                     if err:
+                        db_unreserve_send(TODAY, day_row_id)
                         slack_errors.append(f"- {template}: {err}")
+                        prog.progress(idx / max(1, len(send_items)))
                         continue
-                    time.sleep(0.25)
+                    time.sleep(0.2)
 
-                # ✅ template_text loglanır → global gizleme için yeterli
-                db_add_sent(TODAY, template, USER_KEY)
+                sent_count += 1
+                prog.progress(idx / max(1, len(send_items)))
 
             if slack_errors:
                 st.session_state.sending = False
@@ -868,26 +930,31 @@ if page == "📤 Mesaj Gönder":
                     st.write(e)
                 st.stop()
 
-            st.success("Slack’e gönderildi ✅")
-
-            for k in [table_key, templates_key, vars_key]:
+            # UI temizle + tekrar göndermesin
+            for k in [table_key, templates_key, vars_key, rowids_key]:
                 st.session_state.pop(k, None)
 
+            st.success(f"Slack’e gönderildi ✅  | Gönderilen: {sent_count}  | Kilitli olduğu için atlanan: {skipped_locked}")
             st.session_state.sending = False
             st.rerun()
 
         finally:
             st.session_state.sending = False
 
+    st.markdown('</div>', unsafe_allow_html=True)
+
 # =================================================
-# ⚙️ AYARLAR (DB) — sadece Sinan
+# ⚙️ AYARLAR — sadece Sinan (modern + canlı sıralama, kaydette DB)
 # =================================================
 if page == "⚙️ Ayarlar":
     if not IS_SINAN:
         st.error("Bu sayfaya erişimin yok.")
         st.stop()
 
-    st.title("⚙️ Ayarlar")
+    st.markdown('<div class="block-card">', unsafe_allow_html=True)
+    st.markdown('<div class="h-title">⚙️ Ayarlar</div>', unsafe_allow_html=True)
+    st.markdown('<div class="sub">Kategoriler, günlük satırlar, değişkenler ve ek presetleri.</div>', unsafe_allow_html=True)
+    st.divider()
 
     categories = db_get_categories()
     variables = db_get_variables()
@@ -918,8 +985,8 @@ if page == "⚙️ Ayarlar":
 
     st.divider()
 
-    # -------- Günlük Satırlar (CANLI DÜZENLE / KAYDETTE DB) --------
-    st.subheader("Günlük Satırlar")
+    # -------- Günlük Satırlar (CANLI SIRALA + KAYDETTE DB) --------
+    st.subheader("Günlük Satırlar (Sıra + Düzenle)")
     selected_day_index = st.selectbox(
         "Hangi günün satırlarını düzenliyorsun?",
         options=list(range(7)),
@@ -930,7 +997,6 @@ if page == "⚙️ Ayarlar":
     selected_day_key = DAY_KEYS[selected_day_index]
 
     buffer_key = f"day_rows_buffer_{selected_day_key}"
-
     prev_day_key = st.session_state.get("prev_settings_day_key")
     if prev_day_key != selected_day_key:
         if prev_day_key:
@@ -941,7 +1007,7 @@ if page == "⚙️ Ayarlar":
         rows_db = db_get_day_rows(selected_day_key)
         st.session_state[buffer_key] = [
             {
-                "rid": int(r["id"]),  # stabil id
+                "rid": int(r["id"]),
                 "text": str(r.get("text", "") or ""),
                 "category": str(r.get("category", DEFAULT_CATEGORY) or DEFAULT_CATEGORY),
                 "requires_attachment": bool(r.get("requires_attachment", False)),
@@ -950,8 +1016,7 @@ if page == "⚙️ Ayarlar":
         ]
 
     rows = st.session_state[buffer_key]
-
-    st.markdown("### Sıralama ve Düzenleme (Kaydet deyince DB’ye yazar)")
+    st.markdown('<div class="small-muted">⬆️⬇️ ile sırala, alanları düzenle. DB’ye sadece “Kaydet” ile yazılır.</div>', unsafe_allow_html=True)
 
     for i, row in enumerate(rows):
         rid = row["rid"]
@@ -960,7 +1025,6 @@ if page == "⚙️ Ayarlar":
         up_clicked = c_up.button("⬆️", key=f"up_{selected_day_key}_{rid}", disabled=(i == 0))
         down_clicked = c_down.button("⬇️", key=f"down_{selected_day_key}_{rid}", disabled=(i == len(rows) - 1))
 
-        # Not: buton tıklaması zaten rerun yapar; ekstra st.rerun yok
         if up_clicked and i > 0:
             rows[i - 1], rows[i] = rows[i], rows[i - 1]
         if down_clicked and i < len(rows) - 1:
@@ -995,7 +1059,7 @@ if page == "⚙️ Ayarlar":
     st.session_state[buffer_key] = rows
 
     csave, _ = st.columns([2, 6])
-    if csave.button("💾 Günlük satırları kaydet"):
+    if csave.button("💾 Günlük satırları kaydet", type="primary"):
         cleaned_rows = []
         for r in st.session_state[buffer_key]:
             t = str(r.get("text", "")).strip()
@@ -1038,13 +1102,12 @@ if page == "⚙️ Ayarlar":
             st.rerun()
 
     st.caption("İpucu: Değişken placeholder `{{Kampanya}}` gibi. Değişken kategorisi satır kategorisiyle aynı olmalı.")
-
     st.divider()
 
     # -------- Değişkenler --------
     st.subheader("Değişkenler")
     existing_vars = sorted(list(variables.keys()))
-    pick = st.selectbox("Düzenlemek için mevcut değişken seç (opsiyonel)", options=["(Yeni)"] + existing_vars, key="var_pick")
+    pick = st.selectbox("Düzenlemek için mevcut değişken (opsiyonel)", options=["(Yeni)"] + existing_vars, key="var_pick")
 
     if pick != "(Yeni)":
         vdef = variables.get(pick, {})
@@ -1060,7 +1123,7 @@ if page == "⚙️ Ayarlar":
     var_opts = v3.text_area("Seçenekler (satır satır)", value=default_opts, height=120, key="var_opts")
 
     bA, bB, _ = st.columns([2, 2, 6])
-    if bA.button("💾 Kaydet / Güncelle", key="var_save"):
+    if bA.button("💾 Kaydet / Güncelle", key="var_save", type="primary"):
         name = (var_name or "").strip()
         if not name:
             st.error("Değişken adı boş olamaz.")
@@ -1079,9 +1142,8 @@ if page == "⚙️ Ayarlar":
 
     # -------- Ek Presetleri --------
     st.subheader("Ek Presetleri (Lightshot URL)")
-
     existing_atts = sorted(list(attachments_all.keys()))
-    apick = st.selectbox("Düzenlemek için mevcut preset seç (opsiyonel)", options=["(Yeni)"] + existing_atts, key="att_pick")
+    apick = st.selectbox("Düzenlemek için preset (opsiyonel)", options=["(Yeni)"] + existing_atts, key="att_pick")
 
     if apick != "(Yeni)":
         adef = attachments_all.get(apick, {})
@@ -1101,13 +1163,13 @@ if page == "⚙️ Ayarlar":
         st.caption(f"🗓️ Tarih algılandı: {format_tr_date(inferred_date)} (bu tarihten önce otomatik gizlenir)")
 
     xA, xB, _ = st.columns([2, 2, 6])
-    if xA.button("💾 Kaydet / Güncelle", key="att_save"):
+    if xA.button("💾 Kaydet / Güncelle", key="att_save", type="primary"):
         n = (att_name or "").strip()
         u = (att_url or "").strip()
         if not n or not u:
             st.error("Ek adı ve URL zorunlu.")
         else:
-            vdate = extract_tr_date_from_name(n)  # yoksa NULL => süresiz
+            vdate = extract_tr_date_from_name(n)
             db_upsert_attachment(n, att_cat, u, vdate)
             st.success("Eklendi/Güncellendi ✅")
             st.rerun()
@@ -1116,3 +1178,5 @@ if page == "⚙️ Ayarlar":
         db_delete_attachment(apick)
         st.success("Silindi ✅")
         st.rerun()
+
+    st.markdown('</div>', unsafe_allow_html=True)
