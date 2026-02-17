@@ -399,6 +399,7 @@ if "checking_links" not in st.session_state:
     st.session_state.checking_links = False
 
 USER_KEY = st.session_state.get("user_key", "Sinan")
+IS_SINAN = (USER_KEY == "Sinan")
 
 # Slack token + channel seçimi
 if USER_KEY == "Yağmur":
@@ -418,14 +419,33 @@ if not channel_id:
     st.error("SLACK_CHANNEL_ID secrets içinde yok.")
     st.stop()
 
-# Menü
-page = st.sidebar.radio("Menü", ["📤 Mesaj Gönder", "📜 Gönderim Logu", "⚙️ Ayarlar"])
-st.sidebar.caption(f"👤 Aktif kullanıcı: {USER_KEY}")
+# Menü (rol bazlı)
+if IS_SINAN:
+    page = st.sidebar.radio("Menü", ["📤 Mesaj Gönder", "📜 Gönderim Logu", "⚙️ Ayarlar"])
+    st.sidebar.caption(f"👤 Aktif kullanıcı: {USER_KEY}")
+else:
+    # Diğer kullanıcı sadece Mesaj Gönder görür
+    page = "📤 Mesaj Gönder"
+
+    # Sidebar'ı tamamen gizle (opsiyonel ama temiz)
+    st.markdown(
+        """
+        <style>
+        [data-testid="stSidebar"] { display: none; }
+        [data-testid="stSidebarNav"] { display: none; }
+        </style>
+        """,
+        unsafe_allow_html=True
+    )
 
 # =================================================
 # 📜 GÖNDERİM LOGU (DB)
 # =================================================
 if page == "📜 Gönderim Logu":
+    if not IS_SINAN:
+        st.error("Bu sayfaya erişimin yok.")
+        st.stop()
+
     st.title("📜 Gönderim Logu")
     st.caption("Supabase DB içinden seçtiğin tarihe ait gönderilen satırları gösterir.")
     st.divider()
@@ -453,6 +473,7 @@ if page == "📜 Gönderim Logu":
             st.dataframe(df, width="stretch", hide_index=True)
         else:
             st.write("Log boş.")
+
 
 # =================================================
 # 📤 MESAJ GÖNDER (DB)
@@ -794,6 +815,10 @@ if page == "📤 Mesaj Gönder":
 # ⚙️ AYARLAR (DB)
 # =================================================
 if page == "⚙️ Ayarlar":
+    if not IS_SINAN:
+        st.error("Bu sayfaya erişimin yok.")
+        st.stop()
+
     st.title("⚙️ Ayarlar")
 
     categories = db_get_categories()
@@ -979,3 +1004,4 @@ if page == "⚙️ Ayarlar":
         db_delete_attachment(apick)
         st.success("Silindi ✅")
         st.rerun()
+
