@@ -1006,7 +1006,6 @@ if page == "⚙️ Ayarlar":
         st.stop()
 
     page_header("⚙️ Ayarlar", "Kategoriler, günlük satırlar, değişkenler ve ek presetleri.")
-    st.markdown('<div class="block-card">', unsafe_allow_html=True)
 
     st.divider()
 
@@ -1234,6 +1233,7 @@ if page == "⚙️ Ayarlar":
         st.rerun()
 
     st.markdown('</div>', unsafe_allow_html=True)
+
 
 
 
