@@ -571,7 +571,6 @@ if page == "📜 Gönderim Logu":
         st.stop()
 
     page_header("📜 Gönderim Logu", "Seçtiğin tarihte kim ne göndermiş, tablo halinde.")
-    st.markdown('<div class="block-card">', unsafe_allow_html=True)
 
 
     st.markdown("<div style='height:10px;'></div>", unsafe_allow_html=True)
@@ -625,8 +624,6 @@ if page == "📤 Mesaj Gönder":
       </div>
     </div>
     """, unsafe_allow_html=True)
-
-    st.markdown("<div style='height:12px;'></div>", unsafe_allow_html=True)
 
     categories = db_get_categories()
     variables = db_get_variables()
@@ -1233,6 +1230,7 @@ if page == "⚙️ Ayarlar":
         st.rerun()
 
     st.markdown('</div>', unsafe_allow_html=True)
+
 
 
 
