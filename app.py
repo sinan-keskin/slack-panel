@@ -31,6 +31,18 @@ MODERN_CSS = """
   --brand:#22c55e; --brand2:#06b6d4; --warn:#f59e0b; --bad:#ef4444;
   --radius:14px;
 }
+/* Sayfa başında boş input/ghost bar gibi duran container’ları bastır */
+div[data-testid="stTextInput"]{
+  margin-top: 0.25rem !important;
+}
+div[data-testid="stTextInput"] input:placeholder-shown{
+  background: rgba(255,255,255,.02) !important;
+}
+
+/* İlk elementte gereksiz üst margin olmasın */
+.block-card:first-of-type{
+  margin-top: 0.4rem !important;
+}
 html, body, [data-testid="stAppViewContainer"]{
   background: radial-gradient(1200px 800px at 20% 0%, rgba(34,197,94,.08), transparent 55%),
               radial-gradient(1000px 700px at 80% 20%, rgba(6,182,212,.10), transparent 55%),
@@ -1180,3 +1192,4 @@ if page == "⚙️ Ayarlar":
         st.rerun()
 
     st.markdown('</div>', unsafe_allow_html=True)
+
