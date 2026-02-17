@@ -4,7 +4,7 @@ import re
 from io import BytesIO
 from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
-from datetime import date, datetime
+from datetime import date
 import pandas as pd
 import time
 import psycopg
@@ -227,11 +227,13 @@ def db_delete_attachment(name: str):
         cur.execute("delete from attachments where name=%s", (name,))
 
 # ---------------- SENT LOG ----------------
-# user_key destekli; DB’de user_key yoksa fallback çalışır.
 def db_get_sent_for_date(d: date, user_key: str):
     try:
         with get_conn().cursor() as cur:
-            cur.execute("select template_text from sent_log where sent_date=%s and user_key=%s order by id", (d, user_key))
+            cur.execute(
+                "select template_text from sent_log where sent_date=%s and user_key=%s order by id",
+                (d, user_key),
+            )
             rows = cur.fetchall()
         return [r[0] for r in rows]
     except Exception:
@@ -243,7 +245,10 @@ def db_get_sent_for_date(d: date, user_key: str):
 def db_get_sent_dates(user_key: str):
     try:
         with get_conn().cursor() as cur:
-            cur.execute("select sent_date, count(*) from sent_log where user_key=%s group by sent_date order by sent_date desc", (user_key,))
+            cur.execute(
+                "select sent_date, count(*) from sent_log where user_key=%s group by sent_date order by sent_date desc",
+                (user_key,),
+            )
             rows = cur.fetchall()
         return rows
     except Exception:
@@ -258,16 +263,28 @@ def db_get_sent_today_set(d: date, user_key: str):
 def db_add_sent(d: date, template_text: str, user_key: str):
     try:
         with get_conn().cursor() as cur:
-            cur.execute("select 1 from sent_log where sent_date=%s and user_key=%s and template_text=%s limit 1", (d, user_key, template_text))
+            cur.execute(
+                "select 1 from sent_log where sent_date=%s and user_key=%s and template_text=%s limit 1",
+                (d, user_key, template_text),
+            )
             if cur.fetchone():
                 return
-            cur.execute("insert into sent_log(sent_date, user_key, template_text) values (%s,%s,%s)", (d, user_key, template_text))
+            cur.execute(
+                "insert into sent_log(sent_date, user_key, template_text) values (%s,%s,%s)",
+                (d, user_key, template_text),
+            )
     except Exception:
         with get_conn().cursor() as cur:
-            cur.execute("select 1 from sent_log where sent_date=%s and template_text=%s limit 1", (d, template_text))
+            cur.execute(
+                "select 1 from sent_log where sent_date=%s and template_text=%s limit 1",
+                (d, template_text),
+            )
             if cur.fetchone():
                 return
-            cur.execute("insert into sent_log(sent_date, template_text) values (%s,%s)", (d, template_text))
+            cur.execute(
+                "insert into sent_log(sent_date, template_text) values (%s,%s)",
+                (d, template_text),
+            )
 
 # ================== HELPERS ==================
 def extract_vars(text: str) -> list[str]:
@@ -299,7 +316,6 @@ def fetch_lightshot_image(prnt_url: str):
     return None
 
 def strip_anchors(text: str) -> str:
-    """HTML <a> ve Markdown [text](url) anchorlarını kaldırır, sadece metni bırakır."""
     if not text:
         return text
     text = ANCHOR_HTML.sub(r"\1", text)
@@ -308,7 +324,7 @@ def strip_anchors(text: str) -> str:
 
 def safe_filename_from_category(cat: str) -> str:
     cat = (cat or "image").strip()
-    cat = re.sub(r'[\\/:*?"<>|]', "_", cat)  # Windows-safe
+    cat = re.sub(r'[\\/:*?"<>|]', "_", cat)
     cat = re.sub(r"\s+", " ", cat).strip()
     base = cat[:60] if cat else "image"
     return f"{base}.png"
@@ -324,7 +340,6 @@ def safe_chat_post(client: WebClient, channel_id: str, text: str):
         return f"chat_postMessage: {e}"
 
 def safe_upload_image_with_comment(client: WebClient, channel_id: str, bio: BytesIO, message: str, filename: str):
-    """Tek post: görsel + mesaj (initial_comment)."""
     try:
         bio.seek(0)
         resp = client.files_upload_v2(
@@ -340,10 +355,6 @@ def safe_upload_image_with_comment(client: WebClient, channel_id: str, bio: Byte
         return None, f"files_upload_v2: {e}"
 
 def wait_until_file_visible(client: WebClient, channel_id: str, file_id: str, timeout_sec: float = 12.0) -> bool:
-    """
-    files_upload_v2 döndükten sonra, dosyanın kanalda message olarak görünmesini bekler.
-    conversations_history scope yoksa fallback sleep yapar.
-    """
     start = time.time()
     try:
         while time.time() - start < timeout_sec:
@@ -390,9 +401,8 @@ if not st.session_state.logged:
 
 # ================== STATE ==================
 if "link_cache" not in st.session_state:
-    st.session_state.link_cache = {}  # url -> bool
+    st.session_state.link_cache = {}
 
-# Button lock state (global)
 if "sending" not in st.session_state:
     st.session_state.sending = False
 if "checking_links" not in st.session_state:
@@ -424,10 +434,8 @@ if IS_SINAN:
     page = st.sidebar.radio("Menü", ["📤 Mesaj Gönder", "📜 Gönderim Logu", "⚙️ Ayarlar"])
     st.sidebar.caption(f"👤 Aktif kullanıcı: {USER_KEY}")
 else:
-    # Diğer kullanıcı sadece Mesaj Gönder görür
     page = "📤 Mesaj Gönder"
-
-    # Sidebar'ı tamamen gizle (opsiyonel ama temiz)
+    # sidebar'ı gizle
     st.markdown(
         """
         <style>
@@ -453,7 +461,6 @@ if page == "📜 Gönderim Logu":
     selected_date = st.date_input("Tarih seç", value=TODAY)
     items = db_get_sent_for_date(selected_date, USER_KEY)
 
-    # özet
     all_dates = db_get_sent_dates(USER_KEY)
     c1, c2, _ = st.columns([2, 2, 6])
     c1.metric("Toplam gün", len(all_dates))
@@ -474,7 +481,6 @@ if page == "📜 Gönderim Logu":
         else:
             st.write("Log boş.")
 
-
 # =================================================
 # 📤 MESAJ GÖNDER (DB)
 # =================================================
@@ -485,7 +491,7 @@ if page == "📤 Mesaj Gönder":
 
     categories = db_get_categories()
     variables = db_get_variables()
-    attachments = db_get_attachments(include_expired=False)  # sadece geçerli olanlar
+    attachments = db_get_attachments(include_expired=False)
     sent_today = db_get_sent_today_set(TODAY, USER_KEY)
 
     rows_today = db_get_day_rows(DAY_KEY)
@@ -575,6 +581,7 @@ if page == "📤 Mesaj Gönder":
     cleaned = False
     for idx in range(len(df_out)):
         req = bool(df_out.at[idx, "Ek Zorunlu"])
+
         row_cat = str(df_out.at[idx, "Kategori"] or DEFAULT_CATEGORY).strip() or DEFAULT_CATEGORY
         if row_cat not in categories:
             df_out.at[idx, "Kategori"] = DEFAULT_CATEGORY
@@ -658,12 +665,10 @@ if page == "📤 Mesaj Gönder":
         disabled=st.session_state.sending or st.session_state.checking_links,
     )
 
-    # 1) Tıklanınca kilitle + rerun (çift tıklamayı engeller)
     if send_click and not st.session_state.sending:
         st.session_state.sending = True
         st.rerun()
 
-    # 2) Rerun'da gerçek gönderim işlemi
     if st.session_state.sending:
         try:
             errors = []
@@ -686,7 +691,6 @@ if page == "📤 Mesaj Gönder":
 
                 message = strip_anchors(message)
 
-                # değişken replace + validate
                 row_vars = extract_vars(template)
                 bad_row = False
                 for v in row_vars:
@@ -812,7 +816,7 @@ if page == "📤 Mesaj Gönder":
             st.session_state.sending = False
 
 # =================================================
-# ⚙️ AYARLAR (DB)
+# ⚙️ AYARLAR (DB)  — sadece Sinan
 # =================================================
 if page == "⚙️ Ayarlar":
     if not IS_SINAN:
@@ -850,7 +854,7 @@ if page == "⚙️ Ayarlar":
 
     st.divider()
 
-    # -------- Günlük Satırlar --------
+    # -------- Günlük Satırlar (YUKARI / AŞAĞI SIRALAMA) --------
     st.subheader("Günlük Satırlar")
     selected_day_index = st.selectbox(
         "Hangi günün satırlarını düzenliyorsun?",
@@ -860,48 +864,82 @@ if page == "⚙️ Ayarlar":
         key="settings_day_select",
     )
     selected_day_key = DAY_KEYS[selected_day_index]
-    rows = db_get_day_rows(selected_day_key)
 
-    settings_df = pd.DataFrame({
-        "Sıra": list(range(1, len(rows) + 1)),
-        "Metin": [str(r.get("text", "") or "") for r in rows],
-        "Kategori": [str(r.get("category", DEFAULT_CATEGORY) or DEFAULT_CATEGORY) for r in rows],
-        "Ek Zorunlu": [bool(r.get("requires_attachment", False)) for r in rows],
-    })
-    settings_df["Metin"] = settings_df["Metin"].fillna("").astype(str)
-    settings_df["Kategori"] = settings_df["Kategori"].fillna(DEFAULT_CATEGORY).astype(str)
-    settings_df["Ek Zorunlu"] = settings_df["Ek Zorunlu"].fillna(False).astype(bool)
-    settings_df["Sıra"] = pd.to_numeric(settings_df["Sıra"], errors="coerce").fillna(999999).astype(int)
+    rows_db = db_get_day_rows(selected_day_key)
 
-    edited = st.data_editor(
-        settings_df,
-        width="stretch",
-        hide_index=True,
-        column_config={
-            "Sıra": st.column_config.NumberColumn("Sıra", min_value=1, step=1),
-            "Metin": st.column_config.TextColumn("Metin"),
-            "Kategori": st.column_config.SelectboxColumn("Kategori", options=categories),
-            "Ek Zorunlu": st.column_config.CheckboxColumn("Ek Zorunlu"),
-        },
-        key=f"settings_editor_{selected_day_key}",
-    )
+    # reorder state
+    order_key = f"order_{selected_day_key}"
+    if order_key not in st.session_state:
+        # DB'den gelenleri edit edilebilir forma çevir
+        st.session_state[order_key] = [
+            {
+                "text": str(r.get("text", "") or ""),
+                "category": str(r.get("category", DEFAULT_CATEGORY) or DEFAULT_CATEGORY),
+                "requires_attachment": bool(r.get("requires_attachment", False)),
+            }
+            for r in rows_db
+        ]
+
+    rows = st.session_state[order_key]
+
+    st.markdown("### Sıralama (⬆️ ⬇️ ile değiştir)")
+
+    for i, row in enumerate(rows):
+        col1, col2, col3, col4, col5 = st.columns([0.55, 0.55, 6, 2, 1])
+
+        if col1.button("⬆️", key=f"up_{selected_day_key}_{i}", disabled=(i == 0)):
+            rows[i - 1], rows[i] = rows[i], rows[i - 1]
+            st.session_state[order_key] = rows
+            st.rerun()
+
+        if col2.button("⬇️", key=f"down_{selected_day_key}_{i}", disabled=(i == len(rows) - 1)):
+            rows[i + 1], rows[i] = rows[i], rows[i + 1]
+            st.session_state[order_key] = rows
+            st.rerun()
+
+        row["text"] = col3.text_input(
+            "Metin",
+            value=str(row.get("text", "") or ""),
+            key=f"text_{selected_day_key}_{i}",
+            label_visibility="collapsed",
+        )
+
+        # kategori güvenliği
+        current_cat = str(row.get("category") or DEFAULT_CATEGORY).strip() or DEFAULT_CATEGORY
+        if current_cat not in categories:
+            current_cat = DEFAULT_CATEGORY
+
+        row["category"] = col4.selectbox(
+            "Kategori",
+            options=categories,
+            index=categories.index(current_cat) if current_cat in categories else 0,
+            key=f"cat_{selected_day_key}_{i}",
+            label_visibility="collapsed",
+        )
+
+        row["requires_attachment"] = col5.checkbox(
+            "Ek",
+            value=bool(row.get("requires_attachment", False)),
+            key=f"req_{selected_day_key}_{i}",
+            label_visibility="collapsed",
+        )
 
     csave, _ = st.columns([2, 6])
     if csave.button("💾 Günlük satırları kaydet"):
-        edited2 = edited.copy()
-        edited2["Sıra"] = pd.to_numeric(edited2["Sıra"], errors="coerce").fillna(999999).astype(int)
-        edited2 = edited2.sort_values("Sıra", kind="stable").reset_index(drop=True)
-
-        new_rows = []
-        for _, r in edited2.iterrows():
-            t = "" if pd.isna(r["Metin"]) else str(r["Metin"]).strip()
+        cleaned_rows = []
+        for r in st.session_state[order_key]:
+            t = str(r.get("text", "")).strip()
             if not t:
                 continue
-            cat = str(r.get("Kategori") or DEFAULT_CATEGORY).strip() or DEFAULT_CATEGORY
+            cat = str(r.get("category") or DEFAULT_CATEGORY).strip() or DEFAULT_CATEGORY
             if cat not in categories:
                 cat = DEFAULT_CATEGORY
-            new_rows.append({"text": t, "requires_attachment": bool(r["Ek Zorunlu"]), "category": cat})
-        db_replace_day_rows(selected_day_key, new_rows)
+            cleaned_rows.append(
+                {"text": t, "category": cat, "requires_attachment": bool(r.get("requires_attachment", False))}
+            )
+
+        db_replace_day_rows(selected_day_key, cleaned_rows)
+        del st.session_state[order_key]
         st.success("Kaydedildi ✅")
         st.rerun()
 
@@ -922,6 +960,9 @@ if page == "⚙️ Ayarlar":
             st.warning("Mesaj boş olamaz.")
         else:
             db_add_day_row(selected_day_key, t, new_cat2, bool(new_req))
+            # reorder state'i resetle ki yeni satır hemen görünsün
+            if order_key in st.session_state:
+                del st.session_state[order_key]
             st.success("Satır eklendi ✅")
             st.rerun()
 
@@ -1004,4 +1045,3 @@ if page == "⚙️ Ayarlar":
         db_delete_attachment(apick)
         st.success("Silindi ✅")
         st.rerun()
-
