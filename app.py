@@ -140,7 +140,6 @@ def page_header(title: str, subtitle: str = "", right_html: str = ""):
         unsafe_allow_html=True
     )
 
-
 # ================== CONSTANTS ==================
 TODAY = date.today()
 TODAY_KEY = TODAY.isoformat()
@@ -492,10 +491,11 @@ if "user_key" not in st.session_state:
     st.session_state.user_key = "Sinan"
 
 if not st.session_state.logged:
-   page_header("🔐 Giriş", "Parolanı gir.")
-  st.markdown('<div class="block-card">', unsafe_allow_html=True)
+    page_header("🔐 Giriş", "Parolanı gir.")
 
-
+    st.markdown('<div class="block-card">', unsafe_allow_html=True)
+    st.markdown('<div class="h-title">🔐 Giriş</div>', unsafe_allow_html=True)
+    st.markdown('<div class="sub">Parolanı gir.</div>', unsafe_allow_html=True)
 
     pw = st.text_input("Parola", type="password")
 
@@ -1234,6 +1234,7 @@ if page == "⚙️ Ayarlar":
         st.rerun()
 
     st.markdown('</div>', unsafe_allow_html=True)
+
 
 
 
