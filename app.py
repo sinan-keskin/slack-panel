@@ -435,7 +435,6 @@ if IS_SINAN:
     st.sidebar.caption(f"👤 Aktif kullanıcı: {USER_KEY}")
 else:
     page = "📤 Mesaj Gönder"
-    # sidebar'ı gizle
     st.markdown(
         """
         <style>
@@ -447,7 +446,7 @@ else:
     )
 
 # =================================================
-# 📜 GÖNDERİM LOGU (DB)
+# 📜 GÖNDERİM LOGU (DB) — sadece Sinan
 # =================================================
 if page == "📜 Gönderim Logu":
     if not IS_SINAN:
@@ -581,7 +580,6 @@ if page == "📤 Mesaj Gönder":
     cleaned = False
     for idx in range(len(df_out)):
         req = bool(df_out.at[idx, "Ek Zorunlu"])
-
         row_cat = str(df_out.at[idx, "Kategori"] or DEFAULT_CATEGORY).strip() or DEFAULT_CATEGORY
         if row_cat not in categories:
             df_out.at[idx, "Kategori"] = DEFAULT_CATEGORY
@@ -598,7 +596,6 @@ if page == "📤 Mesaj Gönder":
     if cleaned:
         st.session_state[table_key] = df_out
         st.rerun()
-
     st.session_state[table_key] = df_out
 
     # ============== LINK CHECK (LOCKLU) ==============
@@ -659,7 +656,7 @@ if page == "📤 Mesaj Gönder":
 
     st.divider()
 
-    # ============== SEND (tablo sırası + görsel post görünene kadar bekle) ==============
+    # ============== SEND (locklu) ==============
     send_click = st.button(
         "Slack’e Gönder",
         disabled=st.session_state.sending or st.session_state.checking_links,
@@ -691,6 +688,7 @@ if page == "📤 Mesaj Gönder":
 
                 message = strip_anchors(message)
 
+                # değişken replace + validate
                 row_vars = extract_vars(template)
                 bad_row = False
                 for v in row_vars:
@@ -806,8 +804,7 @@ if page == "📤 Mesaj Gönder":
             st.success("Slack’e gönderildi ✅")
 
             for k in [table_key, templates_key, vars_key]:
-                if k in st.session_state:
-                    del st.session_state[k]
+                st.session_state.pop(k, None)
 
             st.session_state.sending = False
             st.rerun()
@@ -816,7 +813,7 @@ if page == "📤 Mesaj Gönder":
             st.session_state.sending = False
 
 # =================================================
-# ⚙️ AYARLAR (DB)  — sadece Sinan
+# ⚙️ AYARLAR (DB) — sadece Sinan
 # =================================================
 if page == "⚙️ Ayarlar":
     if not IS_SINAN:
@@ -854,7 +851,7 @@ if page == "⚙️ Ayarlar":
 
     st.divider()
 
-    # -------- Günlük Satırlar (YUKARI / AŞAĞI SIRALAMA) --------
+    # -------- Günlük Satırlar (CANLI DÜZENLE / KAYDETTE DB) --------
     st.subheader("Günlük Satırlar")
     selected_day_index = st.selectbox(
         "Hangi günün satırlarını düzenliyorsun?",
@@ -865,14 +862,20 @@ if page == "⚙️ Ayarlar":
     )
     selected_day_key = DAY_KEYS[selected_day_index]
 
-    rows_db = db_get_day_rows(selected_day_key)
+    # --- Edit buffer (DB’ye kaydetmeden canlı düzenleme) ---
+    buffer_key = f"day_rows_buffer_{selected_day_key}"
 
-    # reorder state
-    order_key = f"order_{selected_day_key}"
-    if order_key not in st.session_state:
-        # DB'den gelenleri edit edilebilir forma çevir
-        st.session_state[order_key] = [
+    prev_day_key = st.session_state.get("prev_settings_day_key")
+    if prev_day_key != selected_day_key:
+        if prev_day_key:
+            st.session_state.pop(f"day_rows_buffer_{prev_day_key}", None)
+        st.session_state["prev_settings_day_key"] = selected_day_key
+
+    if buffer_key not in st.session_state:
+        rows_db = db_get_day_rows(selected_day_key)
+        st.session_state[buffer_key] = [
             {
+                "rid": int(r["id"]),  # stabil id
                 "text": str(r.get("text", "") or ""),
                 "category": str(r.get("category", DEFAULT_CATEGORY) or DEFAULT_CATEGORY),
                 "requires_attachment": bool(r.get("requires_attachment", False)),
@@ -880,71 +883,75 @@ if page == "⚙️ Ayarlar":
             for r in rows_db
         ]
 
-    rows = st.session_state[order_key]
+    rows = st.session_state[buffer_key]
 
-    st.markdown("### Sıralama (⬆️ ⬇️ ile değiştir)")
+    st.markdown("### Sıralama ve Düzenleme (Kaydet deyince DB’ye yazar)")
 
     for i, row in enumerate(rows):
-        col1, col2, col3, col4, col5 = st.columns([0.55, 0.55, 6, 2, 1])
+        rid = row["rid"]
+        c1, c2, c3, c4, c5 = st.columns([0.6, 0.6, 6, 2, 1])
 
-        if col1.button("⬆️", key=f"up_{selected_day_key}_{i}", disabled=(i == 0)):
+        up_clicked = c1.button("⬆️", key=f"up_{selected_day_key}_{rid}", disabled=(i == 0))
+        down_clicked = c2.button("⬇️", key=f"down_{selected_day_key}_{rid}", disabled=(i == len(rows) - 1))
+
+        # butona basmak zaten rerun yapar; ekstra st.rerun yok
+        if up_clicked and i > 0:
             rows[i - 1], rows[i] = rows[i], rows[i - 1]
-            st.session_state[order_key] = rows
-            st.rerun()
-
-        if col2.button("⬇️", key=f"down_{selected_day_key}_{i}", disabled=(i == len(rows) - 1)):
+        if down_clicked and i < len(rows) - 1:
             rows[i + 1], rows[i] = rows[i], rows[i + 1]
-            st.session_state[order_key] = rows
-            st.rerun()
 
-        row["text"] = col3.text_input(
+        row["text"] = c3.text_input(
             "Metin",
-            value=str(row.get("text", "") or ""),
-            key=f"text_{selected_day_key}_{i}",
+            value=row["text"],
+            key=f"text_{selected_day_key}_{rid}",
             label_visibility="collapsed",
         )
 
-        # kategori güvenliği
         current_cat = str(row.get("category") or DEFAULT_CATEGORY).strip() or DEFAULT_CATEGORY
         if current_cat not in categories:
             current_cat = DEFAULT_CATEGORY
 
-        row["category"] = col4.selectbox(
+        row["category"] = c4.selectbox(
             "Kategori",
             options=categories,
             index=categories.index(current_cat) if current_cat in categories else 0,
-            key=f"cat_{selected_day_key}_{i}",
+            key=f"cat_{selected_day_key}_{rid}",
             label_visibility="collapsed",
         )
 
-        row["requires_attachment"] = col5.checkbox(
+        row["requires_attachment"] = c5.checkbox(
             "Ek",
             value=bool(row.get("requires_attachment", False)),
-            key=f"req_{selected_day_key}_{i}",
+            key=f"req_{selected_day_key}_{rid}",
             label_visibility="collapsed",
         )
+
+    st.session_state[buffer_key] = rows
 
     csave, _ = st.columns([2, 6])
     if csave.button("💾 Günlük satırları kaydet"):
         cleaned_rows = []
-        for r in st.session_state[order_key]:
+        for r in st.session_state[buffer_key]:
             t = str(r.get("text", "")).strip()
             if not t:
                 continue
             cat = str(r.get("category") or DEFAULT_CATEGORY).strip() or DEFAULT_CATEGORY
             if cat not in categories:
                 cat = DEFAULT_CATEGORY
-            cleaned_rows.append(
-                {"text": t, "category": cat, "requires_attachment": bool(r.get("requires_attachment", False))}
-            )
+            cleaned_rows.append({
+                "text": t,
+                "category": cat,
+                "requires_attachment": bool(r.get("requires_attachment", False)),
+            })
 
         db_replace_day_rows(selected_day_key, cleaned_rows)
-        del st.session_state[order_key]
+        st.session_state.pop(buffer_key, None)
         st.success("Kaydedildi ✅")
         st.rerun()
 
     st.divider()
 
+    # -------- Yeni Satır Ekle --------
     st.subheader("Yeni Satır Ekle")
     new_text = st.text_input(
         "Mesaj",
@@ -960,9 +967,7 @@ if page == "⚙️ Ayarlar":
             st.warning("Mesaj boş olamaz.")
         else:
             db_add_day_row(selected_day_key, t, new_cat2, bool(new_req))
-            # reorder state'i resetle ki yeni satır hemen görünsün
-            if order_key in st.session_state:
-                del st.session_state[order_key]
+            st.session_state.pop(buffer_key, None)  # buffer reset
             st.success("Satır eklendi ✅")
             st.rerun()
 
