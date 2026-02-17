@@ -4,7 +4,8 @@
 #
 # alter table sent_log add column if not exists day_row_id bigint;
 # create unique index if not exists sent_log_unique_day_row on sent_log (sent_date, day_row_id);
-# -- (isteğe bağlı) eski template bazlı index varsa kaldır:
+#
+# (Opsiyonel) Eğer eskiden template bazlı unique index eklediysen:
 # drop index if exists sent_log_unique_day_template;
 # ============================================================
 
@@ -25,62 +26,77 @@ st.set_page_config(page_title="SinanKee", layout="wide", initial_sidebar_state="
 MODERN_CSS = """
 <style>
 :root{
-  --bg0:#0b0f17; --bg1:#0f172a; --card:#0b1220; --card2:#0b1326;
+  --bg0:#070a12; --bg1:#0b1220; --card:#0b1220;
   --stroke:rgba(255,255,255,.08); --stroke2:rgba(255,255,255,.12);
   --text:rgba(255,255,255,.92); --muted:rgba(255,255,255,.62);
   --brand:#22c55e; --brand2:#06b6d4; --warn:#f59e0b; --bad:#ef4444;
   --radius:14px;
 }
-/* Sayfa başında boş input/ghost bar gibi duran container’ları bastır */
-div[data-testid="stTextInput"]{
-  margin-top: 0.25rem !important;
-}
-div[data-testid="stTextInput"] input:placeholder-shown{
-  background: rgba(255,255,255,.02) !important;
-}
 
-/* İlk elementte gereksiz üst margin olmasın */
-.block-card:first-of-type{
-  margin-top: 0.4rem !important;
-}
+/* Arkaplan */
 html, body, [data-testid="stAppViewContainer"]{
-  background: radial-gradient(1200px 800px at 20% 0%, rgba(34,197,94,.08), transparent 55%),
-              radial-gradient(1000px 700px at 80% 20%, rgba(6,182,212,.10), transparent 55%),
-              linear-gradient(180deg, var(--bg0), var(--bg1));
+  background:
+    radial-gradient(1100px 800px at 18% 0%, rgba(34,197,94,.09), transparent 55%),
+    radial-gradient(1000px 700px at 85% 20%, rgba(6,182,212,.10), transparent 58%),
+    linear-gradient(180deg, var(--bg0), var(--bg1));
   color: var(--text) !important;
 }
-[data-testid="stHeader"]{ background: transparent; }
-[data-testid="stToolbar"]{ opacity:.7; }
 
+/* Üst boşluk / header inceltme (üstteki dev “container” hissini bitirir) */
+.main .block-container{
+  padding-top: 1.0rem !important;
+  padding-bottom: 2.0rem !important;
+}
+[data-testid="stHeader"]{
+  background: transparent !important;
+  height: 46px !important;
+}
+[data-testid="stToolbar"]{
+  opacity:.75;
+  top: 0.25rem !important;
+}
+
+/* Kart stili */
 .block-card{
-  background: linear-gradient(180deg, rgba(255,255,255,.04), rgba(255,255,255,.02));
+  background: linear-gradient(180deg, rgba(255,255,255,.05), rgba(255,255,255,.02));
   border: 1px solid var(--stroke);
   border-radius: var(--radius);
   padding: 16px 16px;
-  box-shadow: 0 12px 30px rgba(0,0,0,.25);
+  box-shadow: 0 14px 40px rgba(0,0,0,.32);
 }
+.block-card:first-of-type{ margin-top: .25rem !important; }
+
 .kicker{ color: var(--muted); font-size: 13px; }
-.h-title{ font-size: 28px; font-weight: 750; letter-spacing: .2px; margin: 0 0 6px 0; }
-.sub{ color: var(--muted); margin: 0 0 6px 0; }
+.h-title{ font-size: 28px; font-weight: 780; letter-spacing: .2px; margin: 0 0 6px 0; }
+.sub{ color: var(--muted); margin: 0; }
+
 .badge{
   display:inline-flex; gap:8px; align-items:center;
-  border:1px solid var(--stroke); border-radius: 999px;
-  padding: 6px 10px; background: rgba(255,255,255,.03);
-  color: var(--muted); font-size: 12px;
+  border:1px solid var(--stroke);
+  border-radius: 999px;
+  padding: 6px 10px;
+  background: rgba(255,255,255,.03);
+  color: var(--muted);
+  font-size: 12px;
 }
 .badge-dot{ width:8px; height:8px; border-radius:999px; background: var(--brand); }
-hr{ border-color: var(--stroke) !important; }
+.small-muted{ color: var(--muted); font-size: 12px; }
 
+/* DataFrame/Data editor */
 [data-testid="stDataFrame"], [data-testid="stTable"]{
   border: 1px solid var(--stroke) !important;
   border-radius: var(--radius) !important;
   overflow: hidden !important;
 }
+
+/* Expander */
 [data-testid="stExpander"]{
   border: 1px solid var(--stroke) !important;
   border-radius: var(--radius) !important;
   background: rgba(255,255,255,.02) !important;
 }
+
+/* Butonlar */
 button[kind="primary"]{
   border-radius: 12px !important;
   border: 1px solid rgba(34,197,94,.35) !important;
@@ -89,14 +105,23 @@ button[kind="primary"]{
 button[kind="secondary"], button{
   border-radius: 12px !important;
 }
+
+/* Input/textarea */
 input, textarea{
   border-radius: 12px !important;
 }
-.small-muted{ color: var(--muted); font-size: 12px; }
+
+/* Divider */
+hr{ border-color: var(--stroke) !important; }
+
+/* “Ghost bar” gibi görünen input container’larını sakinleştir */
+div[data-testid="stTextInput"]{ margin-top: 0.25rem !important; }
+div[data-testid="stTextInput"] input:placeholder-shown{
+  background: rgba(255,255,255,.02) !important;
+}
 </style>
 """
 st.markdown(MODERN_CSS, unsafe_allow_html=True)
-
 
 # ================== CONSTANTS ==================
 TODAY = date.today()
@@ -138,7 +163,6 @@ DATE_PREFIX_RE = re.compile(
 )
 
 def extract_tr_date_from_name(name: str):
-    """'16 Aralık Ek Limitli' -> date(YYYY,12,16). Yıl yoksa bu yıl."""
     if not name:
         return None
     m = DATE_PREFIX_RE.match(name.strip())
@@ -157,7 +181,6 @@ def extract_tr_date_from_name(name: str):
 
 def format_tr_date(d: date) -> str:
     return f"{d.day:02d} {TR_MONTH_NAMES[d.month]} {d.year}"
-
 
 # ================== DB ==================
 @st.cache_resource
@@ -324,7 +347,6 @@ def db_get_sent_day_row_ids_for_date(d: date) -> set[int]:
     return set(int(r[0]) for r in rows if r and r[0] is not None)
 
 def db_get_sent_rows_for_date(d: date):
-    """Log ekranı için tablo: sıra + kullanıcı + day_row_id + mesaj"""
     with get_conn().cursor() as cur:
         cur.execute(
             """
@@ -348,24 +370,14 @@ def db_get_sent_rows_for_date(d: date):
     return out
 
 def db_get_log_dates_summary():
-    """Tüm kullanıcılar: gün başına adet"""
     with get_conn().cursor() as cur:
-        cur.execute(
-            "select sent_date, count(*) from sent_log group by sent_date order by sent_date desc"
-        )
-        rows = cur.fetchall()
-    return rows
+        cur.execute("select sent_date, count(*) from sent_log group by sent_date order by sent_date desc")
+        return cur.fetchall()
 
 def db_try_reserve_send(d: date, day_row_id: int, template_text: str, user_key: str) -> bool:
-    """
-    Atomik kilit: aynı gün aynı day_row_id sadece 1 kez.
-    True -> bu kullanıcı gönderebilir
-    False -> başka biri zaten rezerve etti / gönderdi
-    """
     if not day_row_id:
         return False
     template_text = (template_text or "").strip()
-
     with get_conn().cursor() as cur:
         cur.execute(
             """
@@ -376,11 +388,9 @@ def db_try_reserve_send(d: date, day_row_id: int, template_text: str, user_key: 
             """,
             (d, user_key, int(day_row_id), template_text),
         )
-        row = cur.fetchone()
-        return bool(row)
+        return bool(cur.fetchone())
 
 def db_unreserve_send(d: date, day_row_id: int):
-    """Slack başarısızsa, retry için kilidi kaldır."""
     if not day_row_id:
         return
     with get_conn().cursor() as cur:
@@ -388,7 +398,6 @@ def db_unreserve_send(d: date, day_row_id: int):
             "delete from sent_log where sent_date=%s and day_row_id=%s",
             (d, int(day_row_id)),
         )
-
 
 # ================== HELPERS ==================
 def extract_vars(text: str) -> list[str]:
@@ -433,7 +442,6 @@ def safe_filename_from_category(cat: str) -> str:
     base = cat[:60] if cat else "image"
     return f"{base}.png"
 
-
 # ================== SLACK ==================
 def safe_chat_post(client: WebClient, channel_id: str, text: str):
     try:
@@ -459,7 +467,6 @@ def safe_upload_image_with_comment(client: WebClient, channel_id: str, bio: Byte
     except Exception as e:
         return None, f"files_upload_v2: {e}"
 
-
 # ================== LOGIN (2 USER) ==================
 if "logged" not in st.session_state:
     st.session_state.logged = False
@@ -470,6 +477,7 @@ if not st.session_state.logged:
     st.markdown('<div class="block-card">', unsafe_allow_html=True)
     st.markdown('<div class="h-title">🔐 Giriş</div>', unsafe_allow_html=True)
     st.markdown('<div class="sub">Parolanı gir.</div>', unsafe_allow_html=True)
+
     pw = st.text_input("Parola", type="password")
 
     if st.button("Giriş", type="primary"):
@@ -486,9 +494,9 @@ if not st.session_state.logged:
             st.rerun()
         else:
             st.error("Parola yanlış")
+
     st.markdown('</div>', unsafe_allow_html=True)
     st.stop()
-
 
 # ================== STATE ==================
 if "link_cache" not in st.session_state:
@@ -536,7 +544,7 @@ else:
     )
 
 # =================================================
-# 📜 GÖNDERİM LOGU (DB) — sadece Sinan
+# 📜 GÖNDERİM LOGU — sadece Sinan
 # =================================================
 if page == "📜 Gönderim Logu":
     if not IS_SINAN:
@@ -547,6 +555,7 @@ if page == "📜 Gönderim Logu":
     st.markdown('<div class="h-title">📜 Gönderim Logu</div>', unsafe_allow_html=True)
     st.markdown('<div class="sub">Seçtiğin tarihte kim ne göndermiş, tablo halinde.</div>', unsafe_allow_html=True)
 
+    st.markdown("<div style='height:10px;'></div>", unsafe_allow_html=True)
     selected_date = st.date_input("Tarih seç", value=TODAY)
 
     rows_log = db_get_sent_rows_for_date(selected_date)
@@ -556,7 +565,7 @@ if page == "📜 Gönderim Logu":
     c1.metric("Toplam gün", len(all_dates))
     c2.metric("Seçilen gün gönderilen", len(rows_log))
     c3.markdown(
-        f'<span class="badge"><span class="badge-dot"></span> Global kilit aktif: aynı satır aynı gün 1 kere</span>',
+        f'<span class="badge"><span class="badge-dot"></span> Global kilit: aynı satır aynı gün 1 kere</span>',
         unsafe_allow_html=True
     )
 
@@ -575,20 +584,30 @@ if page == "📜 Gönderim Logu":
             st.dataframe(df, width="stretch", hide_index=True)
         else:
             st.write("Log boş.")
+
     st.markdown('</div>', unsafe_allow_html=True)
 
 # =================================================
 # 📤 MESAJ GÖNDER
 # =================================================
 if page == "📤 Mesaj Gönder":
-    st.markdown('<div class="block-card">', unsafe_allow_html=True)
-    st.markdown('<div class="h-title">AksiyonKee</div>', unsafe_allow_html=True)
-    st.markdown(
-        f'<div class="sub">📅 {DAYS_TR[TODAY.weekday()]} — {format_tr_date(TODAY)}</div>',
-        unsafe_allow_html=True
-    )
-    st.markdown(f'<span class="badge"><span class="badge-dot"></span> Aktif kullanıcı: <b>{USER_KEY}</b></span>', unsafe_allow_html=True)
-    st.divider()
+    # Hero header (üstteki “container” hissini de modernleştirir)
+    st.markdown(f"""
+    <div class="block-card" style="padding:18px 18px;">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;">
+        <div>
+          <div class="h-title" style="margin:0;">AksiyonKee</div>
+          <div class="sub" style="margin:6px 0 0 0;">📅 {DAYS_TR[TODAY.weekday()]} — {format_tr_date(TODAY)}</div>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:8px;align-items:flex-end;">
+          <span class="badge"><span class="badge-dot"></span> Aktif kullanıcı: <b>{USER_KEY}</b></span>
+          <span class="badge" style="opacity:.95;"><span class="badge-dot" style="background:var(--brand2);"></span> DB atomik kilit aktif</span>
+        </div>
+      </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    st.markdown("<div style='height:12px;'></div>", unsafe_allow_html=True)
 
     categories = db_get_categories()
     variables = db_get_variables()
@@ -601,20 +620,21 @@ if page == "📤 Mesaj Gönder":
     visible_rows = [r for r in rows_today if int(r.get("id")) not in sent_ids_today]
 
     if not visible_rows:
+        st.markdown('<div class="block-card">', unsafe_allow_html=True)
         st.success("Bugün için gönderilecek yeni bir satır yok ✅")
         st.markdown('</div>', unsafe_allow_html=True)
         st.stop()
 
-    row_ids = [int(r["id"]) for r in visible_rows]
-    templates = [str(r.get("text", "") or "") for r in visible_rows]
-    vars_today = sorted({v for t in templates for v in extract_vars(t)})
+    row_ids_live = [int(r["id"]) for r in visible_rows]
+    templates_live = [str(r.get("text", "") or "") for r in visible_rows]
+    vars_today = sorted({v for t in templates_live for v in extract_vars(t)})
 
-    row_categories = []
+    row_categories_live = []
     for r in visible_rows:
         c = str(r.get("category", DEFAULT_CATEGORY) or DEFAULT_CATEGORY).strip() or DEFAULT_CATEGORY
         if c not in categories:
             c = DEFAULT_CATEGORY
-        row_categories.append(c)
+        row_categories_live.append(c)
 
     table_key = f"table_{DAY_KEY}_{TODAY_KEY}_{USER_KEY}"
     templates_key = f"templates_{DAY_KEY}_{TODAY_KEY}_{USER_KEY}"
@@ -624,44 +644,47 @@ if page == "📤 Mesaj Gönder":
     # İlk kurulum
     if table_key not in st.session_state:
         df_dict = {
-            "Gönder": [True] * len(templates),
-            "Kategori": row_categories,
-            "Mesaj": templates,
+            "Gönder": [True] * len(templates_live),
+            "Kategori": row_categories_live,
+            "Mesaj": templates_live,
             "Ek Zorunlu": [bool(r.get("requires_attachment", False)) for r in visible_rows],
             "Ek Seç": [SELECT_PLACEHOLDER if bool(r.get("requires_attachment", False)) else "" for r in visible_rows],
-            "Lightshot Link": [""] * len(templates),
+            "Lightshot Link": [""] * len(templates_live),
         }
         for var in vars_today:
             col = f"Var: {var}"
-            df_dict[col] = [SELECT_PLACEHOLDER if var in extract_vars(t) else "" for t in templates]
+            df_dict[col] = [SELECT_PLACEHOLDER if var in extract_vars(t) else "" for t in templates_live]
 
         st.session_state[table_key] = pd.DataFrame(df_dict)
-        st.session_state[templates_key] = templates
+        st.session_state[templates_key] = templates_live
         st.session_state[vars_key] = vars_today
-        st.session_state[rowids_key] = row_ids
+        st.session_state[rowids_key] = row_ids_live
 
-    # Eğer başka kullanıcı gönderip satır sayısı değiştiyse, mevcut tabloyu "prune" et
-    # (UI anlık olmasa bile: duplicate zaten DB kilidiyle imkansız)
+    # Başka kullanıcı gönderim yaptıysa tabloyu prune et
     current_rowids = st.session_state.get(rowids_key, [])
-    live_rowids = row_ids  # şu an DB'ye göre görünür id'ler
-    if set(current_rowids) != set(live_rowids):
-        # Sadece hâlâ görünür olanları tut
+    live_set = set(row_ids_live)
+    if set(current_rowids) != live_set:
         df_old = st.session_state[table_key].copy()
         old_ids = list(current_rowids)
-        keep_idx = [i for i, rid in enumerate(old_ids) if rid in set(live_rowids)]
-        df_new = df_old.iloc[keep_idx].reset_index(drop=True)
 
-        # yeni id sırasını aynı keep_idx ile güncelle
+        keep_idx = [i for i, rid in enumerate(old_ids) if rid in live_set]
+        df_new = df_old.iloc[keep_idx].reset_index(drop=True)
         new_ids = [old_ids[i] for i in keep_idx]
 
+        # live template eşlemesi
+        new_templates = []
+        for rid in new_ids:
+            j = row_ids_live.index(rid)
+            new_templates.append(templates_live[j])
+
         st.session_state[table_key] = df_new
-        st.session_state[templates_key] = [templates[live_rowids.index(rid)] for rid in new_ids]
+        st.session_state[templates_key] = new_templates
         st.session_state[rowids_key] = new_ids
-        # vars_key değişmesin (bugünlük yeterli)
-        st.caption("ℹ️ Başka kullanıcı gönderim yaptı: liste güncellendi.")
+        st.caption("ℹ️ Liste güncellendi (başka kullanıcı gönderim yaptı).")
         st.rerun()
 
-    b1, b2, b3, b4 = st.columns([1.2, 1.6, 2.0, 5.2])
+    # Kontrol butonları
+    b1, b2, b3, _ = st.columns([1.2, 1.8, 2.2, 5.0])
     if b1.button("✅ Tümünü Seç", disabled=st.session_state.sending or st.session_state.checking_links):
         st.session_state[table_key]["Gönder"] = True
         st.rerun()
@@ -708,7 +731,7 @@ if page == "📤 Mesaj Gönder":
         disabled=["Ek Zorunlu"],
     )
 
-    # Minimal normalize (kullanıcının yazdığını "gereksiz silmeyelim")
+    # Minimal normalize (kullanıcının girişini gereksiz silmiyoruz)
     cleaned = False
     for idx in range(len(df_out)):
         req = bool(df_out.at[idx, "Ek Zorunlu"])
@@ -905,7 +928,7 @@ if page == "📤 Mesaj Gönder":
             status = st.empty()
 
             for idx, (day_row_id, template, message, fetched_img, row_cat) in enumerate(send_items, start=1):
-                # 🔒 Atomik kilit (tam anlık çakışma engeli)
+                # 🔒 Atomik kilit: tam çakışma engeli
                 reserved = db_try_reserve_send(TODAY, day_row_id, template, USER_KEY)
                 if not reserved:
                     skipped_locked += 1
@@ -930,10 +953,12 @@ if page == "📤 Mesaj Gönder":
                         slack_errors.append(f"- {template}: {err}")
                         prog.progress(idx / max(1, len(send_items)))
                         continue
-                    time.sleep(0.2)
+                    time.sleep(0.20)
 
                 sent_count += 1
                 prog.progress(idx / max(1, len(send_items)))
+
+            status.empty()
 
             if slack_errors:
                 st.session_state.sending = False
@@ -946,17 +971,15 @@ if page == "📤 Mesaj Gönder":
             for k in [table_key, templates_key, vars_key, rowids_key]:
                 st.session_state.pop(k, None)
 
-            st.success(f"Slack’e gönderildi ✅  | Gönderilen: {sent_count}  | Kilitli olduğu için atlanan: {skipped_locked}")
+            st.success(f"Slack’e gönderildi ✅ | Gönderilen: {sent_count} | Kilitli olduğu için atlanan: {skipped_locked}")
             st.session_state.sending = False
             st.rerun()
 
         finally:
             st.session_state.sending = False
 
-    st.markdown('</div>', unsafe_allow_html=True)
-
 # =================================================
-# ⚙️ AYARLAR — sadece Sinan (modern + canlı sıralama, kaydette DB)
+# ⚙️ AYARLAR — sadece Sinan (canlı sıralama, kaydette DB)
 # =================================================
 if page == "⚙️ Ayarlar":
     if not IS_SINAN:
@@ -1192,4 +1215,3 @@ if page == "⚙️ Ayarlar":
         st.rerun()
 
     st.markdown('</div>', unsafe_allow_html=True)
-
