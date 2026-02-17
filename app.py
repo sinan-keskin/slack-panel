@@ -392,6 +392,12 @@ if not st.session_state.logged:
 if "link_cache" not in st.session_state:
     st.session_state.link_cache = {}  # url -> bool
 
+# Button lock state (global)
+if "sending" not in st.session_state:
+    st.session_state.sending = False
+if "checking_links" not in st.session_state:
+    st.session_state.checking_links = False
+
 USER_KEY = st.session_state.get("user_key", "Sinan")
 
 # Slack token + channel seçimi
@@ -500,13 +506,16 @@ if page == "📤 Mesaj Gönder":
         st.session_state[vars_key] = vars_today
 
     b1, b2, b3, _ = st.columns([1, 1.6, 1.8, 6])
-    if b1.button("✅ Tümünü Seç"):
+    if b1.button("✅ Tümünü Seç", disabled=st.session_state.sending or st.session_state.checking_links):
         st.session_state[table_key]["Gönder"] = True
         st.rerun()
-    if b2.button("⛔ Tüm Seçimi Kaldır"):
+    if b2.button("⛔ Tüm Seçimi Kaldır", disabled=st.session_state.sending or st.session_state.checking_links):
         st.session_state[table_key]["Gönder"] = False
         st.rerun()
-    do_check = b3.button("🔎 Linkleri Kontrol Et")
+    do_check = b3.button(
+        "🔎 Linkleri Kontrol Et",
+        disabled=st.session_state.checking_links or st.session_state.sending
+    )
 
     df_in = st.session_state[table_key].copy()
     templates = st.session_state[templates_key]
@@ -541,85 +550,21 @@ if page == "📤 Mesaj Gönder":
         disabled=["Ek Zorunlu"],
     )
 
-    # ============== AUTO-CLEAN (kategori + dropdown sadece seçim) ==============
+    # ============== AUTO-CLEAN (SADE / VERİ SİLMEZ) ==============
     cleaned = False
-    allowed_ek = set(["", "None", SELECT_PLACEHOLDER, MANUAL_OPTION] + sorted(list(attachments.keys())))
-
     for idx in range(len(df_out)):
-        template = templates[idx]
         req = bool(df_out.at[idx, "Ek Zorunlu"])
-
-        # Kategori: sadece seçim
         row_cat = str(df_out.at[idx, "Kategori"] or DEFAULT_CATEGORY).strip() or DEFAULT_CATEGORY
         if row_cat not in categories:
             df_out.at[idx, "Kategori"] = DEFAULT_CATEGORY
-            row_cat = DEFAULT_CATEGORY
             cleaned = True
 
-        row_vars_in_text = set(extract_vars(template))
-
-        # Ek Seç: sadece seçim (paste vs.)
-        ek_sec = str(df_out.at[idx, "Ek Seç"]).strip()
-        if ek_sec not in allowed_ek:
-            df_out.at[idx, "Ek Seç"] = SELECT_PLACEHOLDER if req else ""
-            if not req:
-                df_out.at[idx, "Lightshot Link"] = ""
-            cleaned = True
-            ek_sec = str(df_out.at[idx, "Ek Seç"]).strip()
-
-        # Ek zorunlu değilse ek alanlarını temizle
         if not req:
             if str(df_out.at[idx, "Ek Seç"]).strip() not in ("", "None"):
                 df_out.at[idx, "Ek Seç"] = ""
                 cleaned = True
             if str(df_out.at[idx, "Lightshot Link"]).strip():
                 df_out.at[idx, "Lightshot Link"] = ""
-                cleaned = True
-        else:
-            # Preset seçiliyse kategori kontrol + URL zorla
-            if ek_sec and ek_sec not in ("None", "") and ek_sec not in (SELECT_PLACEHOLDER, MANUAL_OPTION):
-                preset = attachments.get(ek_sec)
-                preset_cat = str((preset.get("category") if isinstance(preset, dict) else DEFAULT_CATEGORY) or DEFAULT_CATEGORY).strip()
-                if preset_cat != row_cat:
-                    df_out.at[idx, "Ek Seç"] = SELECT_PLACEHOLDER
-                    df_out.at[idx, "Lightshot Link"] = ""
-                    cleaned = True
-                else:
-                    preset_url = str(preset.get("url", "") or "").strip()
-                    if preset_url and str(df_out.at[idx, "Lightshot Link"]).strip() != preset_url:
-                        df_out.at[idx, "Lightshot Link"] = preset_url
-                        cleaned = True
-
-            # Manuel seçiliyse link boş değilse dokunma (kullanıcı yazabilir)
-            if str(df_out.at[idx, "Ek Seç"]).strip() == MANUAL_OPTION:
-                pass
-
-        # Değişken kolonları: sadece seçim + kategori uyumu
-        for var in vars_today:
-            col = f"Var: {var}"
-            val = str(df_out.at[idx, col]).strip()
-
-            vdef = variables.get(var, {})
-            opts = vdef.get("options", []) if isinstance(vdef, dict) else []
-            allowed_var = set(["", "None", SELECT_PLACEHOLDER] + (opts or []))
-
-            # metin yazılmış/paste edilmişse düzelt
-            if val not in allowed_var:
-                df_out.at[idx, col] = SELECT_PLACEHOLDER if var in row_vars_in_text else ""
-                cleaned = True
-                val = str(df_out.at[idx, col]).strip()
-
-            # satırda placeholder yoksa temizle
-            if var not in row_vars_in_text:
-                if val and val != "None":
-                    df_out.at[idx, col] = ""
-                    cleaned = True
-                continue
-
-            # placeholder var → kategori uyumu şart
-            vcat = str((vdef.get("category") if isinstance(vdef, dict) else DEFAULT_CATEGORY) or DEFAULT_CATEGORY).strip()
-            if vcat != row_cat:
-                df_out.at[idx, col] = SELECT_PLACEHOLDER
                 cleaned = True
 
     if cleaned:
@@ -628,96 +573,121 @@ if page == "📤 Mesaj Gönder":
 
     st.session_state[table_key] = df_out
 
-    # ============== LINK CHECK (sonuçları ayrı göster) ==============
-    if do_check:
-        results = []
-        df_check = df_out.reset_index(drop=True)
-        for i in range(len(df_check)):
-            row = df_check.loc[i]
-            if not bool(row["Gönder"]) or not bool(row["Ek Zorunlu"]):
-                continue
+    # ============== LINK CHECK (LOCKLU) ==============
+    if do_check and not st.session_state.checking_links:
+        st.session_state.checking_links = True
+        st.rerun()
 
-            row_cat = str(row.get("Kategori") or DEFAULT_CATEGORY).strip() or DEFAULT_CATEGORY
-            ek_sec = str(row.get("Ek Seç", "")).strip()
-            link = str(row.get("Lightshot Link", "")).strip()
-
-            if ek_sec in ("", SELECT_PLACEHOLDER, "None"):
-                results.append({"Satır": i + 1, "Sonuç": "❗ Ek seçilmedi"})
-                continue
-
-            if ek_sec != MANUAL_OPTION:
-                preset = attachments.get(ek_sec)
-                if not isinstance(preset, dict):
-                    results.append({"Satır": i + 1, "Sonuç": "❗ Preset yok"})
+    if st.session_state.checking_links:
+        try:
+            results = []
+            df_check = df_out.reset_index(drop=True)
+            for i in range(len(df_check)):
+                row = df_check.loc[i]
+                if not bool(row["Gönder"]) or not bool(row["Ek Zorunlu"]):
                     continue
-                if str(preset.get("category", DEFAULT_CATEGORY)).strip() != row_cat:
-                    results.append({"Satır": i + 1, "Sonuç": "❗ Preset kategori uyumsuz"})
+
+                row_cat = str(row.get("Kategori") or DEFAULT_CATEGORY).strip() or DEFAULT_CATEGORY
+                ek_sec = str(row.get("Ek Seç", "")).strip()
+                link = str(row.get("Lightshot Link", "")).strip()
+
+                if ek_sec in ("", SELECT_PLACEHOLDER, "None"):
+                    results.append({"Satır": i + 1, "Sonuç": "❗ Ek seçilmedi"})
                     continue
-                link = str(preset.get("url", "") or "").strip()
 
-            if not link:
-                results.append({"Satır": i + 1, "Sonuç": "❗ Link yok"})
-                continue
+                if ek_sec != MANUAL_OPTION:
+                    preset = attachments.get(ek_sec)
+                    if not isinstance(preset, dict):
+                        results.append({"Satır": i + 1, "Sonuç": "❗ Preset yok"})
+                        continue
+                    if str(preset.get("category", DEFAULT_CATEGORY)).strip() != row_cat:
+                        results.append({"Satır": i + 1, "Sonuç": "❗ Preset kategori uyumsuz"})
+                        continue
+                    link = str(preset.get("url", "") or "").strip()
 
-            if not looks_like_lightshot(link):
-                results.append({"Satır": i + 1, "Sonuç": "❗ Link prnt.sc değil"})
-                continue
+                if not link:
+                    results.append({"Satır": i + 1, "Sonuç": "❗ Link yok"})
+                    continue
 
-            ok = st.session_state.link_cache.get(link)
-            if ok is None:
-                ok = fetch_lightshot_image(link) is not None
-                st.session_state.link_cache[link] = ok
-            results.append({"Satır": i + 1, "Sonuç": "✅ OK" if ok else "❌ Görsel alınamadı"})
+                if not looks_like_lightshot(link):
+                    results.append({"Satır": i + 1, "Sonuç": "❗ Link prnt.sc değil"})
+                    continue
 
-        if results:
-            df_res = pd.DataFrame(results)
-            bad = df_res["Sonuç"].str.startswith("❌") | df_res["Sonuç"].str.startswith("❗")
-            st.error("Link kontrolünde sorun var:") if bad.any() else st.success("Link kontrolü OK ✅")
-            st.dataframe(df_res, width="stretch", hide_index=True)
-        else:
-            st.info("Kontrol edilecek ek yok.")
+                ok = st.session_state.link_cache.get(link)
+                if ok is None:
+                    ok = fetch_lightshot_image(link) is not None
+                    st.session_state.link_cache[link] = ok
+                results.append({"Satır": i + 1, "Sonuç": "✅ OK" if ok else "❌ Görsel alınamadı"})
+
+            if results:
+                df_res = pd.DataFrame(results)
+                bad = df_res["Sonuç"].str.startswith("❌") | df_res["Sonuç"].str.startswith("❗")
+                st.error("Link kontrolünde sorun var:") if bad.any() else st.success("Link kontrolü OK ✅")
+                st.dataframe(df_res, width="stretch", hide_index=True)
+            else:
+                st.info("Kontrol edilecek ek yok.")
+        finally:
+            st.session_state.checking_links = False
 
     st.divider()
 
     # ============== SEND (tablo sırası + görsel post görünene kadar bekle) ==============
-    if st.button("Slack’e Gönder"):
-        errors = []
-        send_items = []
+    send_click = st.button(
+        "Slack’e Gönder",
+        disabled=st.session_state.sending or st.session_state.checking_links,
+    )
 
-        df_send = df_out.reset_index(drop=True)
+    # 1) Tıklanınca kilitle + rerun (çift tıklamayı engeller)
+    if send_click and not st.session_state.sending:
+        st.session_state.sending = True
+        st.rerun()
 
-        for i in range(len(df_send)):
-            row = df_send.loc[i]
-            if not bool(row["Gönder"]):
-                continue
+    # 2) Rerun'da gerçek gönderim işlemi
+    if st.session_state.sending:
+        try:
+            errors = []
+            send_items = []
 
-            template = templates[i]
-            message = str(row["Mesaj"]).strip()
-            req = bool(row["Ek Zorunlu"])
+            df_send = df_out.reset_index(drop=True)
 
-            row_cat = str(row.get("Kategori") or DEFAULT_CATEGORY).strip() or DEFAULT_CATEGORY
-            if row_cat not in categories:
-                row_cat = DEFAULT_CATEGORY
+            for i in range(len(df_send)):
+                row = df_send.loc[i]
+                if not bool(row["Gönder"]):
+                    continue
 
-            message = strip_anchors(message)
+                template = templates[i]
+                message = str(row["Mesaj"]).strip()
+                req = bool(row["Ek Zorunlu"])
 
-            # değişken replace + validate
-            row_vars = extract_vars(template)
-            for v in row_vars:
-                vdef = variables.get(v, {})
-                vcat = str((vdef.get("category") if isinstance(vdef, dict) else DEFAULT_CATEGORY) or DEFAULT_CATEGORY).strip()
-                if vcat != row_cat:
-                    errors.append(f"- Değişken kategori uyumsuz ({v}/{vcat}) satır:{row_cat} → {template}")
-                    break
+                row_cat = str(row.get("Kategori") or DEFAULT_CATEGORY).strip() or DEFAULT_CATEGORY
+                if row_cat not in categories:
+                    row_cat = DEFAULT_CATEGORY
 
-                col = f"Var: {v}"
-                sel = str(row.get(col, "")).strip()
-                if sel in ("", SELECT_PLACEHOLDER, "None"):
-                    errors.append(f"- {v} seçilmedi: {template}")
-                    break
+                message = strip_anchors(message)
 
-                message = message.replace(f"{{{{{v}}}}}", sel)
-            else:
+                # değişken replace + validate
+                row_vars = extract_vars(template)
+                bad_row = False
+                for v in row_vars:
+                    vdef = variables.get(v, {})
+                    vcat = str((vdef.get("category") if isinstance(vdef, dict) else DEFAULT_CATEGORY) or DEFAULT_CATEGORY).strip()
+                    if vcat != row_cat:
+                        errors.append(f"- Değişken kategori uyumsuz ({v}/{vcat}) satır:{row_cat} → {template}")
+                        bad_row = True
+                        break
+
+                    col = f"Var: {v}"
+                    sel = str(row.get(col, "")).strip()
+                    if sel in ("", SELECT_PLACEHOLDER, "None"):
+                        errors.append(f"- {v} seçilmedi: {template}")
+                        bad_row = True
+                        break
+
+                    message = message.replace(f"{{{{{v}}}}}", sel)
+
+                if bad_row:
+                    continue
+
                 fetched_img = None
                 if req:
                     ek_sec = str(row.get("Ek Seç", "")).strip()
@@ -757,60 +727,68 @@ if page == "📤 Mesaj Gönder":
 
                 send_items.append((template, message, fetched_img, row_cat))
 
-        if errors:
-            st.error("Gönderim durduruldu. Hatalar:")
-            for e in errors[:160]:
-                st.write(e)
-            st.stop()
+            if errors:
+                st.session_state.sending = False
+                st.error("Gönderim durduruldu. Hatalar:")
+                for e in errors[:160]:
+                    st.write(e)
+                st.stop()
 
-        if not send_items:
-            st.warning("Gönderilecek içerik yok.")
-            st.stop()
+            if not send_items:
+                st.session_state.sending = False
+                st.warning("Gönderilecek içerik yok.")
+                st.stop()
 
-        slack_errors = []
+            slack_errors = []
 
-        for template, message, fetched_img, row_cat in send_items:
-            if fetched_img is not None:
-                filename = safe_filename_from_category(row_cat)
+            for template, message, fetched_img, row_cat in send_items:
+                if fetched_img is not None:
+                    filename = safe_filename_from_category(row_cat)
 
-                resp, err = safe_upload_image_with_comment(
-                    client, channel_id, fetched_img, message=message, filename=filename
-                )
-                if err:
-                    slack_errors.append(f"- {template}: {err}")
-                    continue
+                    resp, err = safe_upload_image_with_comment(
+                        client, channel_id, fetched_img, message=message, filename=filename
+                    )
+                    if err:
+                        slack_errors.append(f"- {template}: {err}")
+                        continue
 
-                file_id = None
-                if isinstance(resp, dict):
-                    f = resp.get("file")
-                    if isinstance(f, dict):
-                        file_id = f.get("id")
+                    file_id = None
+                    if isinstance(resp, dict):
+                        f = resp.get("file")
+                        if isinstance(f, dict):
+                            file_id = f.get("id")
 
-                if file_id:
-                    wait_until_file_visible(client, channel_id, file_id, timeout_sec=12.0)
+                    if file_id:
+                        wait_until_file_visible(client, channel_id, file_id, timeout_sec=12.0)
+                    else:
+                        time.sleep(1.2)
                 else:
-                    time.sleep(1.2)
-            else:
-                err = safe_chat_post(client, channel_id, message)
-                if err:
-                    slack_errors.append(f"- {template}: {err}")
-                    continue
-                time.sleep(0.25)
+                    err = safe_chat_post(client, channel_id, message)
+                    if err:
+                        slack_errors.append(f"- {template}: {err}")
+                        continue
+                    time.sleep(0.25)
 
-            db_add_sent(TODAY, template, USER_KEY)
+                db_add_sent(TODAY, template, USER_KEY)
 
-        if slack_errors:
-            st.error("Bazı içerikler gönderilemedi:")
-            for e in slack_errors[:100]:
-                st.write(e)
-            st.stop()
+            if slack_errors:
+                st.session_state.sending = False
+                st.error("Bazı içerikler gönderilemedi:")
+                for e in slack_errors[:100]:
+                    st.write(e)
+                st.stop()
 
-        st.success("Slack’e gönderildi ✅")
+            st.success("Slack’e gönderildi ✅")
 
-        for k in [table_key, templates_key, vars_key]:
-            if k in st.session_state:
-                del st.session_state[k]
-        st.rerun()
+            for k in [table_key, templates_key, vars_key]:
+                if k in st.session_state:
+                    del st.session_state[k]
+
+            st.session_state.sending = False
+            st.rerun()
+
+        finally:
+            st.session_state.sending = False
 
 # =================================================
 # ⚙️ AYARLAR (DB)
@@ -860,6 +838,7 @@ if page == "⚙️ Ayarlar":
     rows = db_get_day_rows(selected_day_key)
 
     settings_df = pd.DataFrame({
+        "Sıra": list(range(1, len(rows) + 1)),
         "Metin": [str(r.get("text", "") or "") for r in rows],
         "Kategori": [str(r.get("category", DEFAULT_CATEGORY) or DEFAULT_CATEGORY) for r in rows],
         "Ek Zorunlu": [bool(r.get("requires_attachment", False)) for r in rows],
@@ -867,12 +846,14 @@ if page == "⚙️ Ayarlar":
     settings_df["Metin"] = settings_df["Metin"].fillna("").astype(str)
     settings_df["Kategori"] = settings_df["Kategori"].fillna(DEFAULT_CATEGORY).astype(str)
     settings_df["Ek Zorunlu"] = settings_df["Ek Zorunlu"].fillna(False).astype(bool)
+    settings_df["Sıra"] = pd.to_numeric(settings_df["Sıra"], errors="coerce").fillna(999999).astype(int)
 
     edited = st.data_editor(
         settings_df,
         width="stretch",
         hide_index=True,
         column_config={
+            "Sıra": st.column_config.NumberColumn("Sıra", min_value=1, step=1),
             "Metin": st.column_config.TextColumn("Metin"),
             "Kategori": st.column_config.SelectboxColumn("Kategori", options=categories),
             "Ek Zorunlu": st.column_config.CheckboxColumn("Ek Zorunlu"),
@@ -882,8 +863,12 @@ if page == "⚙️ Ayarlar":
 
     csave, _ = st.columns([2, 6])
     if csave.button("💾 Günlük satırları kaydet"):
+        edited2 = edited.copy()
+        edited2["Sıra"] = pd.to_numeric(edited2["Sıra"], errors="coerce").fillna(999999).astype(int)
+        edited2 = edited2.sort_values("Sıra", kind="stable").reset_index(drop=True)
+
         new_rows = []
-        for _, r in edited.iterrows():
+        for _, r in edited2.iterrows():
             t = "" if pd.isna(r["Metin"]) else str(r["Metin"]).strip()
             if not t:
                 continue
@@ -974,7 +959,6 @@ if page == "⚙️ Ayarlar":
     att_cat = a2.selectbox("Kategori", options=categories, index=categories.index(default_att_cat) if default_att_cat in categories else 0, key="att_cat")
     att_url = a3.text_input("Lightshot / prnt.sc URL", value=default_att_url, placeholder="https://prnt.sc/xxxxxxx", key="att_url")
 
-    # valid_date: addaki TR tarihten otomatik
     inferred_date = extract_tr_date_from_name((att_name or "").strip())
     if inferred_date:
         st.caption(f"🗓️ Tarih algılandı: {format_tr_date(inferred_date)} (bu tarihten önce otomatik gizlenir)")
@@ -995,4 +979,3 @@ if page == "⚙️ Ayarlar":
         db_delete_attachment(apick)
         st.success("Silindi ✅")
         st.rerun()
-
