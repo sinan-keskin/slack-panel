@@ -123,6 +123,24 @@ div[data-testid="stTextInput"] input:placeholder-shown{
 """
 st.markdown(MODERN_CSS, unsafe_allow_html=True)
 
+def page_header(title: str, subtitle: str = "", right_html: str = ""):
+    st.markdown(
+        f"""
+        <div class="block-card" style="padding:18px 18px;">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;">
+            <div>
+              <div class="h-title" style="margin:0;">{title}</div>
+              <div class="sub" style="margin:6px 0 0 0;">{subtitle}</div>
+            </div>
+            {right_html}
+          </div>
+        </div>
+        <div style="height:12px;"></div>
+        """,
+        unsafe_allow_html=True
+    )
+
+
 # ================== CONSTANTS ==================
 TODAY = date.today()
 TODAY_KEY = TODAY.isoformat()
@@ -474,9 +492,10 @@ if "user_key" not in st.session_state:
     st.session_state.user_key = "Sinan"
 
 if not st.session_state.logged:
-    st.markdown('<div class="block-card">', unsafe_allow_html=True)
-    st.markdown('<div class="h-title">🔐 Giriş</div>', unsafe_allow_html=True)
-    st.markdown('<div class="sub">Parolanı gir.</div>', unsafe_allow_html=True)
+   page_header("🔐 Giriş", "Parolanı gir.")
+  st.markdown('<div class="block-card">', unsafe_allow_html=True)
+
+
 
     pw = st.text_input("Parola", type="password")
 
@@ -551,9 +570,9 @@ if page == "📜 Gönderim Logu":
         st.error("Bu sayfaya erişimin yok.")
         st.stop()
 
+    page_header("📜 Gönderim Logu", "Seçtiğin tarihte kim ne göndermiş, tablo halinde.")
     st.markdown('<div class="block-card">', unsafe_allow_html=True)
-    st.markdown('<div class="h-title">📜 Gönderim Logu</div>', unsafe_allow_html=True)
-    st.markdown('<div class="sub">Seçtiğin tarihte kim ne göndermiş, tablo halinde.</div>', unsafe_allow_html=True)
+
 
     st.markdown("<div style='height:10px;'></div>", unsafe_allow_html=True)
     selected_date = st.date_input("Tarih seç", value=TODAY)
@@ -986,9 +1005,9 @@ if page == "⚙️ Ayarlar":
         st.error("Bu sayfaya erişimin yok.")
         st.stop()
 
+    page_header("⚙️ Ayarlar", "Kategoriler, günlük satırlar, değişkenler ve ek presetleri.")
     st.markdown('<div class="block-card">', unsafe_allow_html=True)
-    st.markdown('<div class="h-title">⚙️ Ayarlar</div>', unsafe_allow_html=True)
-    st.markdown('<div class="sub">Kategoriler, günlük satırlar, değişkenler ve ek presetleri.</div>', unsafe_allow_html=True)
+
     st.divider()
 
     categories = db_get_categories()
@@ -1215,5 +1234,6 @@ if page == "⚙️ Ayarlar":
         st.rerun()
 
     st.markdown('</div>', unsafe_allow_html=True)
+
 
 
