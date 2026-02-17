@@ -636,9 +636,7 @@ if page == "📤 Mesaj Gönder":
     visible_rows = [r for r in rows_today if int(r.get("id")) not in sent_ids_today]
 
     if not visible_rows:
-        st.markdown('<div class="block-card">', unsafe_allow_html=True)
         st.success("Bugün için gönderilecek yeni bir satır yok ✅")
-        st.markdown('</div>', unsafe_allow_html=True)
         st.stop()
 
     row_ids_live = [int(r["id"]) for r in visible_rows]
@@ -1230,6 +1228,7 @@ if page == "⚙️ Ayarlar":
         st.rerun()
 
     st.markdown('</div>', unsafe_allow_html=True)
+
 
 
 
