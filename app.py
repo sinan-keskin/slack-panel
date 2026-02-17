@@ -636,6 +636,7 @@ if page == "📤 Mesaj Gönder":
     visible_rows = [r for r in rows_today if int(r.get("id")) not in sent_ids_today]
 
     if not visible_rows:
+        st.divider()
         st.success("Bugün için gönderilecek yeni bir satır yok ✅")
         st.stop()
 
@@ -1228,6 +1229,7 @@ if page == "⚙️ Ayarlar":
         st.rerun()
 
     st.markdown('</div>', unsafe_allow_html=True)
+
 
 
 
