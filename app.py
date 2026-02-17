@@ -601,7 +601,7 @@ if page == "📤 Mesaj Gönder":
         </div>
         <div style="display:flex;flex-direction:column;gap:8px;align-items:flex-end;">
           <span class="badge"><span class="badge-dot"></span> Aktif kullanıcı: <b>{USER_KEY}</b></span>
-          <span class="badge" style="opacity:.95;"><span class="badge-dot" style="background:var(--brand2);"></span> Güvenlik Aktif</span>
+          <span class="badge" style="opacity:.95;"><span class="badge-dot" style="background:var(--brand2);"></span> Güvenlik Durumu: Aktif</span>
         </div>
       </div>
     </div>
@@ -1215,4 +1215,5 @@ if page == "⚙️ Ayarlar":
         st.rerun()
 
     st.markdown('</div>', unsafe_allow_html=True)
+
 
