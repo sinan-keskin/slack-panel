@@ -493,9 +493,6 @@ if "user_key" not in st.session_state:
 if not st.session_state.logged:
     page_header("🔐 Giriş", "Parolanı gir.")
 
-    st.markdown('<div class="block-card">', unsafe_allow_html=True)
-    st.markdown('<div class="h-title">🔐 Giriş</div>', unsafe_allow_html=True)
-    st.markdown('<div class="sub">Parolanı gir.</div>', unsafe_allow_html=True)
 
     pw = st.text_input("Parola", type="password")
 
@@ -1229,6 +1226,7 @@ if page == "⚙️ Ayarlar":
         st.rerun()
 
     st.markdown('</div>', unsafe_allow_html=True)
+
 
 
 
